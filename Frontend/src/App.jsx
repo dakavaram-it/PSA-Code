@@ -1,10 +1,11 @@
 import React, { useState, useMemo, useEffect } from "react";
 import {
-  LayoutDashboard, Users, ClipboardList, Search, Plus, Sun, Moon,
+  LayoutDashboard, Users, ClipboardList, Search, Plus,
   ChevronLeft, Eye, KeyRound, X, Check, ShieldCheck, MapPin, Layers,
-  AlertTriangle, UserCheck, UserX, PackageOpen, FolderTree, Save, RotateCcw, Copy,
+  AlertTriangle, UserCheck, UserX, FolderTree, Save, RotateCcw, Copy, UserPlus,
 } from "lucide-react";
 import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre } from "./data/api.js";
+import { cn } from "./lib/utils.js";
 
 /*
   User Admin Console — React (mock data, backend later).
@@ -21,16 +22,17 @@ import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre } f
     - Invented roleDefs + BOOTH level -> replaced by the real lookups. [§5.7]
 
   What remains is driven entirely by activity_member -> tdp_cadre. [§0.2, §5.1]
+
+  UI language: reskinned to the "Smart AI Interview / Jobseeker" design system —
+  purple/indigo gradient theme, rounded-2xl soft-shadow cards with hover-lift,
+  category-colour icon tiles, pill CTAs, fade-in-up entrances. Built with Tailwind.
 */
 
 // ---------------------------------------------------------------------------
-// DATA (inlined so this file runs standalone as an artifact).
-// In the real project this lives in src/data/mockData.js and is replaced by API
-// calls with the identical shape.
-// ---------------------------------------------------------------------------
-// Lookups now come from the live API at startup (bootstrap in AdminConsole).
+// DATA — lookups come from the live API at startup (bootstrap in AdminConsole).
 // Module-scope `let` so every screen reads them without prop-drilling; they are
 // populated once, before the first non-loading render.
+// ---------------------------------------------------------------------------
 let USER_TYPES = [];
 let USER_LEVELS = [];
 let USED_LEVEL_IDS = [5, 4, 2];
@@ -52,8 +54,6 @@ const INITIAL_GROUPS = [
   { user_group_id: 6, notes: "FIELD_SURVEY_GROUP", component_ids: [103, 110, 45] },
 ];
 
-// tdp_cadre MID lookup is now a live read via api.lookupCadre() (imported above).
-
 // Effective components = group-inherited ∪ personal. Returns tagged list.
 function effectiveComponents(member, groups) {
   const grp = member.group_id ? groups.find((g) => g.user_group_id === member.group_id) : null;
@@ -67,21 +67,14 @@ function effectiveComponents(member, groups) {
 }
 
 // --- OTP: client-side 6-digit generator, mock only. -------------------------
-// NOTE: real OTP must be generated, delivered and validated server-side with an
-// expiry. "Unique" is not enforceable in a browser; this exists so the reset
-// flow is demonstrable, not to be shipped as-is.
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
-// Location option lists for the (mock) edit/create dropdowns. The live DB stores
-// location_value as a bare int (constituency/parliament id), which the read-only
-// table renders as-is; these name lists back the write-flow pickers only.
 const CONSTITUENCIES = ["Tirupati", "Mangalagiri", "Guntur East", "Rajahmundry City", "Visakhapatnam North", "Kurnool", "Kadapa", "Anantapur Urban", "Nellore City", "Kakinada City", "Eluru", "Ongole", "Chittoor", "Machilipatnam"];
 const PARLIAMENTS = ["Tirupati", "Guntur", "Rajahmundry", "Visakhapatnam", "Kurnool", "Nellore", "Anantapur"];
 
 function computeStats(members) {
   const active = members.filter((m) => m.is_acitve === "Y");
   const inactive = members.filter((m) => m.is_acitve === "N");
-  const withoutComponents = active.filter((m) => m.component_ids.length === 0);
   const roleCounts = {}, levelCounts = {}, compCounts = {};
   active.forEach((m) => {
     roleCounts[m.role_name] = (roleCounts[m.role_name] || 0) + 1;
@@ -95,29 +88,10 @@ function computeStats(members) {
   const onStandard = active.filter((m) => [...m.component_ids].sort().join(",") === bundleKey).length;
   return {
     total: members.length, active: active.length, inactive: inactive.length,
-    withoutComponents: withoutComponents.length, roleCounts, levelCounts, topComponents,
+    roleCounts, levelCounts, topComponents,
     onStandard, onStandardPct: active.length ? Math.round((onStandard / active.length) * 100) : 0,
   };
 }
-
-// ---------------------------------------------------------------------------
-// THEME — ports the prototype's blueprint palette to inline CSS vars so the
-// artifact needs no external stylesheet.
-// ---------------------------------------------------------------------------
-const THEMES = {
-  dark: {
-    bg: "#15181b", surface: "#1c2024", surface2: "#22272b", text: "#e6e8ea",
-    subtle: "#9aa4ac", accent: "#8fb4d9", accent700: "#bcd4ea",
-    divider: "rgba(230,232,234,0.14)", ok: "#7fc99a", warn: "#e0b062", bad: "#e08a8a",
-  },
-  light: {
-    bg: "#f2f3f5", surface: "#ffffff", surface2: "#f7f8fa", text: "#1b2126",
-    subtle: "#5b6670", accent: "#2f6f9f", accent700: "#22537a",
-    divider: "rgba(27,33,38,0.12)", ok: "#2f8f57", warn: "#a5741f", bad: "#b64c4c",
-  },
-};
-const HEAD = "'Space Grotesk','Segoe UI',system-ui,sans-serif";
-const BODY = "'Inter','Segoe UI',system-ui,sans-serif";
 
 const initials = (n) => (n || "").split(" ").filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "—";
 const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—");
@@ -125,10 +99,29 @@ const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString(undefined, { da
 const NO_NAME = "— unnamed —";
 
 // ---------------------------------------------------------------------------
+// Shared class recipes — lifted from the reference's real page classes.
+// ---------------------------------------------------------------------------
+const CARD = "rounded-2xl border border-gray-100 bg-white shadow-lg";
+const CARD_HOVER = "transition-all duration-300 hover:-translate-y-1 hover:shadow-xl";
+const INPUT = "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-200 focus:border-purple-400 transition";
+const PRIMARY = "inline-flex items-center justify-center gap-2 rounded-xl bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow transition-all hover:bg-purple-700 hover:shadow-lg disabled:pointer-events-none disabled:opacity-50";
+const SECONDARY = "inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-50 disabled:opacity-50";
+const LABEL = "text-xs font-medium text-gray-500";
+const SECTION = "flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-purple-600";
+
+// Category colour scheme, mirroring the reference feature cards (-50 tile + -500 icon).
+const CAT = {
+  blue:   { tile: "bg-blue-50",     icon: "text-blue-500",   bar: "bg-blue-500" },
+  purple: { tile: "bg-purple-50", icon: "text-purple-500", bar: "bg-purple-500" },
+  indigo: { tile: "bg-indigo-50", icon: "text-indigo-500", bar: "bg-indigo-500" },
+  green:  { tile: "bg-green-50",    icon: "text-green-500",  bar: "bg-green-500" },
+  amber:  { tile: "bg-amber-50",   icon: "text-amber-500",  bar: "bg-amber-500" },
+  gray:   { tile: "bg-gray-100",       icon: "text-gray-400",   bar: "bg-gray-400" },
+};
+
+// ---------------------------------------------------------------------------
 export default function AdminConsole() {
-  const [dark, setDark] = useState(true);
-  const t = dark ? THEMES.dark : THEMES.light;
-  const [screen, setScreen] = useState("overview"); // overview | users | detail | audit
+  const [screen, setScreen] = useState("dashboard"); // dashboard | users | detail | groups
   const [members, setMembers] = useState([]);       // loaded live from the API
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -181,14 +174,11 @@ export default function AdminConsole() {
     });
   }, [members, filters]);
 
-  // Commit an edited copy of one member (draft -> Save on the Detail screen).
   function saveMember(edited) {
     setMembers((ms) => ms.map((m) => m.activity_member_id === edited.activity_member_id ? edited : m));
     flash(`Changes saved for ${edited.member_name}`);
   }
-  function openOtp(m) {
-    setOtpModal({ member: m, code: generateOtp() });
-  }
+  function openOtp(m) { setOtpModal({ member: m, code: generateOtp() }); }
   function bulkSet(flag) {
     setMembers((ms) => ms.map((m) => selected.has(m.activity_member_id) ? { ...m, is_acitve: flag } : m));
     flash(`${selected.size} login${selected.size > 1 ? "s" : ""} ${flag === "Y" ? "activated" : "deactivated"}`);
@@ -230,111 +220,109 @@ export default function AdminConsole() {
   }
 
   const NAV = [
-    { key: "overview", label: "Overview", icon: <LayoutDashboard size={18} /> },
+    { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
     { key: "users", label: "Logins", icon: <Users size={18} />, badge: stats.active },
     { key: "groups", label: "Groups", icon: <FolderTree size={18} />, badge: groups.length },
-    { key: "audit", label: "Activity", icon: <ClipboardList size={18} /> },
   ];
-  const CRUMB = { overview: "Dashboard", users: "Access management", detail: "Access management", groups: "Reference", audit: "Records" };
-  const TITLE = { overview: "Overview", users: "Login accounts", detail: activeUser?.member_name || "Login", groups: "Group catalogue", audit: "Recent changes" };
+  const CRUMB = { dashboard: "Console", users: "Access management", detail: "Access management", groups: "Reference" };
+  const TITLE = { dashboard: "Dashboard", users: "Login accounts", detail: activeUser?.member_name || "Login", groups: "Group catalogue" };
 
   if (loading || loadError) {
     return (
-      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: t.bg, color: loadError ? t.bad : t.subtle, fontFamily: BODY, fontSize: 14, padding: 24, textAlign: "center" }}>
-        {loadError || "Loading live data…"}
+      <div className="grid min-h-screen place-items-center bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-100 p-6 text-center">
+        <div className="flex flex-col items-center gap-4">
+          {!loadError && <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-purple-200 border-t-purple-600" />}
+          <span className={cn("text-sm", loadError ? "text-red-500" : "text-gray-500")}>
+            {loadError || "Loading live data…"}
+          </span>
+        </div>
       </div>
     );
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: t.bg, color: t.text, display: "flex", fontFamily: BODY }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
-        *{box-sizing:border-box}
-        ::-webkit-scrollbar{width:9px;height:9px}
-        ::-webkit-scrollbar-thumb{background:${t.divider};border-radius:6px}
-        .ac-nav:hover{background:${dark ? "rgba(255,255,255,.05)" : "rgba(0,0,0,.04)"}}
-        .ac-row:hover{background:${dark ? "rgba(255,255,255,.03)" : "rgba(0,0,0,.025)"}}
-        .ac-row:hover td:nth-child(2){color:${t.accent}}
-        .ac-btn{cursor:pointer;border:none;font-family:${BODY};font-weight:500;transition:.12s}
-        input:focus,select:focus{outline:2px solid ${t.accent};outline-offset:1px}
-        @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-        .fade{animation:fade .22s ease both}
-      `}</style>
-
+    <div className="flex min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-100 font-sans text-gray-900">
       {/* SIDEBAR */}
-      <aside style={{ width: 232, flex: "none", borderRight: `1px solid ${t.divider}`, background: t.bg, position: "sticky", top: 0, height: "100vh", display: "flex", flexDirection: "column", padding: "18px 0" }}>
-        <div style={{ padding: "0 18px 18px", display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ position: "relative", width: 34, height: 34, display: "grid", placeItems: "center", color: t.accent, border: `1px solid ${t.accent}`, borderRadius: 2 }}>
-            <span style={{ fontFamily: HEAD, fontWeight: 700, fontSize: 17 }}>B</span>
-          </div>
-          <div style={{ lineHeight: 1.05 }}>
-            <div style={{ fontFamily: HEAD, fontWeight: 700, fontSize: 15, letterSpacing: "-.01em" }}>BharatBase</div>
-            <div style={{ fontSize: 9.5, letterSpacing: ".16em", textTransform: "uppercase", color: t.accent }}>Admin Console</div>
+      <aside className="sticky top-0 flex h-screen w-60 flex-none flex-col border-r border-white/60 bg-white/70 py-5 backdrop-blur-xl">
+        <div className="flex items-center gap-3 px-5 pb-5">
+          <div className="grid h-10 w-10 flex-none place-items-center rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 font-head text-lg font-bold text-white shadow-md">U</div>
+          <div className="leading-tight">
+            <div className="font-head text-[15px] font-bold tracking-tight">User</div>
+            <div className="text-[9.5px] uppercase tracking-[0.16em] text-purple-500">Admin Console</div>
           </div>
         </div>
-        <div style={{ padding: "6px 14px 6px", fontSize: 9.5, letterSpacing: ".14em", textTransform: "uppercase", color: t.subtle }}>Manage</div>
-        <nav style={{ display: "flex", flexDirection: "column", gap: 2, padding: "0 10px" }}>
+        <div className="px-5 py-1.5 text-[9.5px] uppercase tracking-[0.14em] text-gray-400">Manage</div>
+        <nav className="flex flex-col gap-1 px-3">
           {NAV.map((it) => {
             const on = screen === it.key || (it.key === "users" && screen === "detail");
             return (
-              <button key={it.key} className="ac-nav ac-btn" onClick={() => { setScreen(it.key); setActiveId(null); }}
-                style={{ display: "flex", alignItems: "center", gap: 11, padding: "9px 12px", borderRadius: 3, background: on ? (dark ? "rgba(143,180,217,.14)" : "rgba(47,111,159,.1)") : "transparent", color: on ? t.accent700 : t.text, fontSize: 13.5, textAlign: "left" }}>
-                <span style={{ display: "flex", width: 18, flex: "none" }}>{it.icon}</span>
-                <span style={{ flex: 1 }}>{it.label}</span>
-                {it.badge != null && <span style={{ padding: "1px 7px", fontSize: 10, borderRadius: 10, background: dark ? "rgba(143,180,217,.22)" : "rgba(47,111,159,.14)", color: t.accent700 }}>{it.badge}</span>}
+              <button key={it.key} onClick={() => { setScreen(it.key); setActiveId(null); }}
+                className={cn(
+                  "flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all",
+                  on
+                    ? "bg-purple-100 font-semibold text-purple-700 shadow-sm"
+                    : "font-medium text-gray-600 hover:bg-purple-50",
+                )}>
+                <span className="flex w-[18px] flex-none">{it.icon}</span>
+                <span className="flex-1">{it.label}</span>
+                {it.badge != null && (
+                  <span className="rounded-full bg-purple-200/70 px-2 py-0.5 text-[10px] font-semibold text-purple-700">{it.badge}</span>
+                )}
               </button>
             );
           })}
         </nav>
-        <div style={{ marginTop: "auto", padding: "0 16px" }}>
-          <div style={{ padding: "12px", border: `1px solid ${t.divider}`, borderRadius: 4, fontSize: 11, color: t.subtle, lineHeight: 1.5 }}>
-            <AlertTriangle size={13} style={{ verticalAlign: "-2px", marginRight: 5, color: t.warn }} />
-            Live data, read-only. Edits made here are not saved back to the database yet.
+        <div className="mt-auto px-4">
+          <div className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white/70 p-3 shadow-sm">
+            <div className="grid h-9 w-9 flex-none place-items-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 font-head text-sm font-bold text-white">A</div>
+            <div className="leading-tight">
+              <div className="text-sm font-semibold">ADMIN</div>
+              <div className="text-[11px] text-gray-400">Administrator</div>
+            </div>
           </div>
         </div>
       </aside>
 
       {/* MAIN */}
-      <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+      <main className="flex min-w-0 flex-1 flex-col">
         {/* TOPBAR */}
-        <header style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 26px", borderBottom: `1px solid ${t.divider}`, position: "sticky", top: 0, background: t.bg, zIndex: 5 }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 10.5, letterSpacing: ".12em", textTransform: "uppercase", color: t.accent }}>{CRUMB[screen]}</div>
-            <h1 style={{ margin: 0, fontFamily: HEAD, fontSize: 22, lineHeight: 1.1, fontWeight: 600 }}>{TITLE[screen]}</h1>
+        <header className="sticky top-0 z-10 flex items-center gap-4 border-b border-white/60 bg-white/50 px-6 py-4 backdrop-blur-xl">
+          <div className="min-w-0 flex-1">
+            <div className="text-[10.5px] uppercase tracking-[0.12em] text-purple-500">{CRUMB[screen]}</div>
+            <h1 className="font-head text-[22px] font-semibold leading-tight">{TITLE[screen]}</h1>
           </div>
-          <button className="ac-btn" onClick={() => setDark(!dark)} title="Toggle theme" style={{ width: 38, height: 38, display: "grid", placeItems: "center", border: `1px solid ${t.divider}`, borderRadius: 3, background: t.surface, color: t.text }}>
-            {dark ? <Sun size={16} /> : <Moon size={16} />}
-          </button>
-          <button className="ac-btn" onClick={() => setShowCreate(true)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 15px", borderRadius: 3, background: t.accent, color: dark ? t.bg : "#fff", fontWeight: 600, fontSize: 13, whiteSpace: "nowrap" }}>
-            <Plus size={16} /> New login
-          </button>
+          <div className="flex items-center gap-3">
+            <div className="hidden text-right leading-tight sm:block">
+              <div className="text-sm font-semibold">ADMIN</div>
+              <div className="text-[11px] text-gray-400">Administrator</div>
+            </div>
+            <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 font-head font-bold text-white shadow">A</div>
+          </div>
         </header>
 
-        <div key={screen + (activeId || "")} className="fade" style={{ padding: "24px 26px 60px", flex: 1 }}>
-          {screen === "overview" && <Overview t={t} dark={dark} stats={stats} />}
+        <div key={screen + (activeId || "")} className="flex-1 animate-fade-in-up px-6 pb-16 pt-6">
+          {screen === "dashboard" && <Overview stats={stats} onCreate={() => setShowCreate(true)} />}
           {screen === "users" && (
-            <UsersScreen t={t} dark={dark} rows={filtered} total={members.length} filters={filters} setFilters={setFilters}
+            <UsersScreen rows={filtered} total={members.length} filters={filters} setFilters={setFilters}
               selected={selected} setSelected={setSelected} bulkSet={bulkSet} onOpen={(id) => { setActiveId(id); setScreen("detail"); }}
               onReset={openOtp} />
           )}
           {screen === "detail" && activeUser && (
-            <DetailScreen key={activeUser.activity_member_id} t={t} dark={dark} u={activeUser} groups={groups}
+            <DetailScreen key={activeUser.activity_member_id} u={activeUser} groups={groups}
               onBack={() => setScreen("users")} onSave={saveMember} onReset={() => openOtp(activeUser)} />
           )}
           {screen === "groups" && (
-            <GroupsScreen t={t} dark={dark} groups={groups} members={members} activeGroupId={activeGroupId}
+            <GroupsScreen groups={groups} members={members} activeGroupId={activeGroupId}
               setActiveGroupId={setActiveGroupId} onSaveGroup={saveGroup} onDeleteGroup={deleteGroup} onSetMemberGroup={setMemberGroup} />
           )}
-          {screen === "audit" && <AuditScreen t={t} dark={dark} members={members} />}
         </div>
       </main>
 
-      {showCreate && <CreateModal t={t} dark={dark} groups={groups} onClose={() => setShowCreate(false)} onCreate={createMember} onOtp={openOtp} />}
-      {otpModal && <OtpModal t={t} dark={dark} data={otpModal} onRegenerate={() => setOtpModal({ ...otpModal, code: generateOtp() })} onClose={() => setOtpModal(null)} onSent={() => { flash(`OTP sent to ${otpModal.member.member_name}`); setOtpModal(null); }} />}
+      {showCreate && <CreateModal groups={groups} onClose={() => setShowCreate(false)} onCreate={createMember} onOtp={openOtp} />}
+      {otpModal && <OtpModal data={otpModal} onRegenerate={() => setOtpModal({ ...otpModal, code: generateOtp() })} onClose={() => setOtpModal(null)} onSent={() => { flash(`OTP sent to ${otpModal.member.member_name}`); setOtpModal(null); }} />}
       {toast && (
-        <div className="fade" style={{ position: "fixed", bottom: 22, left: "50%", transform: "translateX(-50%)", background: t.surface, border: `1px solid ${t.divider}`, borderRadius: 4, padding: "10px 16px", fontSize: 13, boxShadow: "0 10px 30px rgba(0,0,0,.35)", display: "flex", alignItems: "center", gap: 8, zIndex: 50 }}>
-          <Check size={15} style={{ color: t.ok }} /> {toast}
+        <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-fade-in-up items-center gap-2 rounded-xl border border-gray-100 bg-white px-4 py-2.5 text-sm shadow-xl">
+          <Check size={15} className="text-green-500" /> {toast}
         </div>
       )}
     </div>
@@ -342,87 +330,137 @@ export default function AdminConsole() {
 }
 
 // --- shared bits -------------------------------------------------------------
-function Card({ t, children, style }) {
-  return <div style={{ background: t.surface, border: `1px solid ${t.divider}`, borderRadius: 5, ...style }}>{children}</div>;
+function Card({ children, className }) {
+  return <div className={cn(CARD, className)}>{children}</div>;
 }
-function StatusPill({ t, active }) {
-  const c = active ? t.ok : t.subtle;
-  return <span style={{ display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 9px", borderRadius: 10, fontSize: 11, fontWeight: 500, background: `${c}22`, color: c }}>
-    <span style={{ width: 6, height: 6, borderRadius: 6, background: c }} />{active ? "Active" : "Inactive"}
-  </span>;
+function SectionTitle({ icon, children }) {
+  return <div className={SECTION}><span className="flex">{icon}</span>{children}</div>;
 }
-function RoleBadge({ t, dark, label }) {
-  return <span style={{ padding: "2px 8px", borderRadius: 3, fontSize: 10.5, fontWeight: 500, background: dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.05)", color: t.text }}>{label}</span>;
+function StatusPill({ active }) {
+  return (
+    <span className={cn(
+      "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+      active ? "bg-green-100 text-green-700"
+             : "bg-gray-100 text-gray-500",
+    )}>
+      <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-green-500" : "bg-gray-400")} />
+      {active ? "Active" : "Inactive"}
+    </span>
+  );
+}
+function RoleBadge({ label }) {
+  return <span className="rounded-full bg-purple-100 px-2.5 py-0.5 text-[10.5px] font-semibold text-purple-700">{label}</span>;
+}
+function KV({ k, v, mono }) {
+  return (
+    <div className="flex justify-between gap-3">
+      <span className="text-gray-500">{k}</span>
+      <span className={cn("break-words text-right", mono && "font-mono")}>{v}</span>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return <label className="flex min-w-[130px] flex-col gap-1.5"><span className={LABEL}>{label}</span>{children}</label>;
+}
+function ErrLine({ children }) {
+  return <div className="flex items-center gap-2 text-sm text-red-600"><AlertTriangle size={14} /> {children}</div>;
+}
+
+// SVG progress ring — the reference's CircularProgressBar, in purple.
+function Ring({ pct, size = 88, stroke = 9 }) {
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const off = c * (1 - pct / 100);
+  return (
+    <div className="relative flex-none" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} className="fill-none stroke-purple-100" />
+        <circle cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={off} className="fill-none stroke-purple-600 transition-all duration-700" />
+      </svg>
+      <div className="absolute inset-0 grid place-items-center font-head font-bold text-purple-700" style={{ fontSize: size * 0.24 }}>{pct}%</div>
+    </div>
+  );
 }
 
 // --- OVERVIEW ---------------------------------------------------------------
-function Overview({ t, dark, stats }) {
+function Overview({ stats, onCreate }) {
   const kpis = [
-    { label: "Total users", value: stats.total, icon: <Users size={16} />, note: "All login accounts" },
-    { label: "Active", value: stats.active, icon: <UserCheck size={16} />, note: "Can sign in", color: t.ok },
-    { label: "Inactive", value: stats.inactive, icon: <UserX size={16} />, note: "Deactivated", color: t.subtle },
-    { label: "No dashboards", value: stats.withoutComponents, icon: <PackageOpen size={16} />, note: "No components assigned", color: stats.withoutComponents ? t.warn : t.ok },
+    { label: "Total Users", value: stats.total, icon: <Users size={20} />, note: "All login accounts", cat: "blue" },
+    { label: "Active Users", value: stats.active, icon: <UserCheck size={20} />, note: "Can sign in", cat: "green" },
+    { label: "Inactive Users", value: stats.inactive, icon: <UserX size={20} />, note: "Deactivated", cat: "gray" },
   ];
   const roleRows = Object.entries(stats.roleCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
-  const maxRole = Math.max(1, ...roleRows.map((r) => r[1]));
   const maxComp = Math.max(1, ...stats.topComponents.map((c) => c.count));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))", gap: 14 }}>
-        {kpis.map((k) => (
-          <Card key={k.label} t={t} style={{ padding: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <span style={{ fontSize: 10.5, letterSpacing: ".05em", textTransform: "uppercase", color: t.subtle }}>{k.label}</span>
-              <span style={{ color: k.color || t.accent, display: "flex" }}>{k.icon}</span>
-            </div>
-            <div style={{ fontFamily: HEAD, fontWeight: 700, fontSize: 30, lineHeight: 1 }}>{k.value}</div>
-            <div style={{ fontSize: 11, color: t.subtle, marginTop: 5 }}>{k.note}</div>
-          </Card>
-        ))}
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-4">
+        {kpis.map((k) => {
+          const cat = CAT[k.cat];
+          return (
+            <Card key={k.label} className={cn(CARD_HOVER, "p-5")}>
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-[10.5px] font-medium uppercase tracking-wide text-gray-400">{k.label}</span>
+                <span className={cn("grid h-10 w-10 place-items-center rounded-xl shadow-sm", cat.tile, cat.icon)}>{k.icon}</span>
+              </div>
+              <div className="font-head text-[30px] font-bold leading-none">{k.value}</div>
+              <div className="mt-1.5 text-[11px] text-gray-500">{k.note}</div>
+            </Card>
+          );
+        })}
+        <button onClick={onCreate} className={cn(CARD_HOVER, "flex flex-col items-start justify-between rounded-2xl border border-purple-300/60 bg-gradient-to-br from-purple-600 to-indigo-600 p-5 text-left text-white shadow-lg")}>
+          <div className="mb-4 flex w-full items-center justify-between">
+            <span className="text-[10.5px] font-medium uppercase tracking-wide text-white/70">Quick action</span>
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-white/20"><UserPlus size={20} /></span>
+          </div>
+          <div className="font-head text-lg font-bold leading-tight">Create New User</div>
+          <div className="mt-1.5 text-[11px] text-white/80">Add a login account</div>
+        </button>
       </div>
 
       {/* Standard bundle callout — the report's headline finding. [§4.2] */}
-      <Card t={t} style={{ padding: 18, display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap" }}>
-        <div style={{ display: "grid", placeItems: "center", width: 74, height: 74, borderRadius: "50%", border: `3px solid ${t.accent}`, color: t.accent, fontFamily: HEAD, fontWeight: 700, fontSize: 20, flex: "none" }}>
-          {stats.onStandardPct}%
-        </div>
-        <div style={{ flex: 1, minWidth: 220 }}>
-          <div style={{ fontFamily: HEAD, fontWeight: 600, fontSize: 16 }}>{stats.onStandard} active logins share one component bundle</div>
-          <div style={{ fontSize: 12.5, color: t.subtle, marginTop: 4, lineHeight: 1.5 }}>
+      <Card className="flex flex-wrap items-center gap-5 p-6">
+        <Ring pct={stats.onStandardPct} />
+        <div className="min-w-[220px] flex-1">
+          <div className="font-head text-base font-semibold">{stats.onStandard} active logins share one component bundle</div>
+          <div className="mt-1.5 text-[12.5px] leading-relaxed text-gray-500">
             Membership Dashboard, Cubs-Committees, Committee Meetings, SIR Dashboard. Role and component set are largely decoupled — the "New login" flow offers this as a one-click preset.
           </div>
         </div>
       </Card>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-        <Card t={t} style={{ padding: 18 }}>
-          <SectionTitle t={t} icon={<ShieldCheck size={14} />}>Logins by role</SectionTitle>
-          <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 12 }}>
-            {roleRows.map(([role, n]) => (
-              <div key={role}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
-                  <span>{role}</span><span style={{ color: t.subtle }}>{n}</span>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <Card className="p-6">
+          <SectionTitle icon={<ShieldCheck size={14} />}>Logins by role</SectionTitle>
+          <div className="mt-4 flex flex-col gap-3.5">
+            {roleRows.map(([role, n]) => {
+              const share = stats.active ? (n / stats.active) * 100 : 0;
+              return (
+                <div key={role} className="flex items-center gap-3">
+                  <span className="w-28 flex-none truncate text-[13px] font-medium">{role}</span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
+                    <div className="h-full rounded-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-500" style={{ width: `${share}%` }} />
+                  </div>
+                  <span className="w-12 flex-none text-right font-mono text-[13px] font-semibold tabular-nums">{n}</span>
+                  <span className="w-14 flex-none text-right font-mono text-[11px] tabular-nums text-purple-500">{share.toFixed(1)}%</span>
                 </div>
-                <div style={{ height: 6, background: dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)", borderRadius: 4 }}>
-                  <div style={{ height: "100%", width: `${(n / maxRole) * 100}%`, background: t.accent, borderRadius: 4 }} />
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
 
-        <Card t={t} style={{ padding: 18 }}>
-          <SectionTitle t={t} icon={<Layers size={14} />}>Most-granted components</SectionTitle>
-          <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 12 }}>
+        <Card className="p-6">
+          <SectionTitle icon={<Layers size={14} />}>Most-granted components</SectionTitle>
+          <div className="mt-4 flex flex-col gap-3">
             {stats.topComponents.map((c) => (
               <div key={c.id}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3, gap: 8 }}>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.label}</span>
-                  <span style={{ color: t.subtle, flex: "none" }}>{c.count}</span>
+                <div className="mb-1 flex justify-between gap-2 text-xs">
+                  <span className="truncate">{c.label}</span>
+                  <span className="flex-none text-gray-400">{c.count}</span>
                 </div>
-                <div style={{ height: 6, background: dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)", borderRadius: 4 }}>
-                  <div style={{ height: "100%", width: `${(c.count / maxComp) * 100}%`, background: t.accent700, borderRadius: 4 }} />
+                <div className="h-1.5 rounded-full bg-gray-100">
+                  <div className="h-full rounded-full bg-indigo-500 transition-all duration-500" style={{ width: `${(c.count / maxComp) * 100}%` }} />
                 </div>
               </div>
             ))}
@@ -431,20 +469,20 @@ function Overview({ t, dark, stats }) {
       </div>
 
       {/* Geographic scope — only 3 of 9 levels used. [§3.3] */}
-      <Card t={t} style={{ padding: 18 }}>
-        <SectionTitle t={t} icon={<MapPin size={14} />}>Geographic scope in use</SectionTitle>
-        <div style={{ display: "flex", gap: 14, marginTop: 12, flexWrap: "wrap" }}>
+      <Card className="p-6">
+        <SectionTitle icon={<MapPin size={14} />}>Geographic scope in use</SectionTitle>
+        <div className="mt-4 flex flex-wrap gap-4">
           {USED_LEVEL_IDS.map((lid) => {
             const name = USER_LEVELS.find((l) => l.id === lid).name;
             const n = stats.levelCounts[name] || 0;
             return (
-              <div key={lid} style={{ flex: 1, minWidth: 140, padding: 14, border: `1px solid ${t.divider}`, borderRadius: 4 }}>
-                <div style={{ fontFamily: HEAD, fontWeight: 700, fontSize: 24 }}>{n}</div>
-                <div style={{ fontSize: 11, letterSpacing: ".05em", textTransform: "uppercase", color: t.subtle, marginTop: 2 }}>{name}</div>
+              <div key={lid} className="min-w-[140px] flex-1 rounded-xl border border-gray-100 bg-gray-50/60 p-4">
+                <div className="font-head text-2xl font-bold">{n}</div>
+                <div className="mt-0.5 text-[11px] uppercase tracking-wide text-gray-400">{name}</div>
               </div>
             );
           })}
-          <div style={{ flex: 1, minWidth: 140, padding: 14, border: `1px dashed ${t.divider}`, borderRadius: 4, color: t.subtle, fontSize: 12, display: "flex", alignItems: "center" }}>
+          <div className="flex min-w-[140px] flex-1 items-center rounded-xl border border-dashed border-gray-200 p-4 text-xs text-gray-400">
             The other 6 levels (District, Mandal, Village…) have no members.
           </div>
         </div>
@@ -452,14 +490,9 @@ function Overview({ t, dark, stats }) {
     </div>
   );
 }
-function SectionTitle({ t, icon, children }) {
-  return <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: t.accent }}>
-    <span style={{ display: "flex" }}>{icon}</span>{children}
-  </div>;
-}
 
 // --- USERS ------------------------------------------------------------------
-function UsersScreen({ t, dark, rows, total, filters, setFilters, selected, setSelected, bulkSet, onOpen, onReset }) {
+function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, bulkSet, onOpen, onReset }) {
   const allSel = rows.length > 0 && rows.every((r) => selected.has(r.activity_member_id));
   const toggleAll = () => {
     const next = new Set(selected);
@@ -468,93 +501,89 @@ function UsersScreen({ t, dark, rows, total, filters, setFilters, selected, setS
     setSelected(next);
   };
   const toggleOne = (id) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
-  const inputStyle = { background: t.surface, border: `1px solid ${t.divider}`, borderRadius: 3, color: t.text, padding: "8px 10px", fontSize: 13, fontFamily: BODY };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card t={t} style={{ padding: 14, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-        <label style={{ flex: 1, minWidth: 180, display: "flex", flexDirection: "column", gap: 5 }}>
-          <span style={{ fontSize: 11, color: t.subtle }}>Search membership ID, name or mobile</span>
-          <div style={{ position: "relative" }}>
-            <Search size={15} style={{ position: "absolute", left: 10, top: 10, color: t.subtle }} />
+    <div className="flex flex-col gap-4">
+      <Card className="flex flex-wrap items-end gap-3 p-4">
+        <label className="flex min-w-[180px] flex-1 flex-col gap-1.5">
+          <span className={LABEL}>Search membership ID, name or mobile</span>
+          <div className="group relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-purple-500" />
             <input value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} placeholder="e.g. 20481 or Priya"
-              style={{ ...inputStyle, width: "100%", paddingLeft: 32 }} />
+              className={cn(INPUT, "pl-9")} />
           </div>
         </label>
-        <Field t={t} label="Status">
-          <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} style={inputStyle}>
+        <Field label="Status">
+          <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })} className={INPUT}>
             <option value="all">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
           </select>
         </Field>
-        <Field t={t} label="Role">
-          <select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })} style={inputStyle}>
+        <Field label="Role">
+          <select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })} className={INPUT}>
             <option value="all">All roles</option>
             {USER_TYPES.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}
           </select>
         </Field>
-        <Field t={t} label="Level">
-          <select value={filters.level} onChange={(e) => setFilters({ ...filters, level: e.target.value })} style={inputStyle}>
+        <Field label="Level">
+          <select value={filters.level} onChange={(e) => setFilters({ ...filters, level: e.target.value })} className={INPUT}>
             <option value="all">All levels</option>
             {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
           </select>
         </Field>
-        <button className="ac-btn" onClick={() => setFilters({ q: "", status: "all", role: "all", level: "all" })}
-          style={{ padding: "9px 14px", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface, color: t.text, fontSize: 13 }}>Reset</button>
+        <button onClick={() => setFilters({ q: "", status: "all", role: "all", level: "all" })} className={SECONDARY}>Reset</button>
       </Card>
 
       {selected.size > 0 && (
-        <div className="fade" style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: dark ? "rgba(143,180,217,.12)" : "rgba(47,111,159,.08)", border: `1px solid ${t.divider}`, borderRadius: 4, flexWrap: "wrap" }}>
-          <strong style={{ fontSize: 13 }}>{selected.size} selected</strong>
-          <button className="ac-btn" onClick={() => bulkSet("Y")} style={secBtn(t)}>Activate</button>
-          <button className="ac-btn" onClick={() => bulkSet("N")} style={secBtn(t)}>Deactivate</button>
-          <button className="ac-btn" onClick={() => setSelected(new Set())} style={{ ...secBtn(t), background: "transparent", border: "none", color: t.subtle }}>Clear</button>
+        <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-purple-100 bg-purple-50 px-4 py-2.5">
+          <strong className="text-sm text-purple-700">{selected.size} selected</strong>
+          <button onClick={() => bulkSet("Y")} className={SECONDARY}>Activate</button>
+          <button onClick={() => bulkSet("N")} className={SECONDARY}>Deactivate</button>
+          <button onClick={() => setSelected(new Set())} className="text-sm font-medium text-gray-500 hover:text-gray-700">Clear</button>
         </div>
       )}
 
-      <Card t={t} style={{ overflow: "hidden" }}>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <Card className="overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm">
             <thead>
-              <tr style={{ background: t.surface2, color: t.subtle, fontSize: 11, textTransform: "uppercase", letterSpacing: ".05em" }}>
-                <th style={{ width: 34, padding: "10px 0 10px 14px", textAlign: "left" }}>
-                  <input type="checkbox" checked={allSel} onChange={toggleAll} style={{ accentColor: t.accent, width: 15, height: 15 }} />
+              <tr className="bg-gray-50/80 text-[11px] uppercase tracking-wide text-gray-400">
+                <th className="w-9 py-2.5 pl-4 text-left">
+                  <input type="checkbox" checked={allSel} onChange={toggleAll} className="h-4 w-4 accent-purple-600" />
                 </th>
                 {["Membership ID", "Name", "Mobile", "Role", "Scope", "Status", "Created", ""].map((h, i) => (
-                  <th key={i} style={{ textAlign: i === 7 ? "right" : "left", padding: i === 7 ? "10px 14px" : "10px 8px", fontWeight: 500, whiteSpace: "nowrap" }}>{h}</th>
+                  <th key={i} className={cn("whitespace-nowrap font-medium", i === 7 ? "px-4 py-2.5 text-right" : "px-2 py-2.5 text-left")}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rows.map((u) => (
-                <tr key={u.activity_member_id} className="ac-row" style={{ borderTop: `1px solid ${t.divider}` }}>
-                  <td style={{ padding: "0 0 0 14px" }}>
-                    <input type="checkbox" checked={selected.has(u.activity_member_id)} onChange={() => toggleOne(u.activity_member_id)} style={{ accentColor: t.accent, width: 15, height: 15 }} />
+                <tr key={u.activity_member_id} className="border-t border-gray-100 transition-colors hover:bg-purple-50/50">
+                  <td className="pl-4"><input type="checkbox" checked={selected.has(u.activity_member_id)} onChange={() => toggleOne(u.activity_member_id)} className="h-4 w-4 accent-purple-600" /></td>
+                  <td onClick={() => onOpen(u.activity_member_id)} className="cursor-pointer px-2 py-2.5 font-head font-semibold hover:text-purple-600">
+                    {u.membership_id || <span className="text-[11px] text-amber-600">— none —</span>}
                   </td>
-                  <td onClick={() => onOpen(u.activity_member_id)} style={{ cursor: "pointer", fontFamily: HEAD, fontWeight: 600, padding: "10px 8px" }}>
-                    {u.membership_id || <span style={{ color: t.warn, fontSize: 11 }}>— none —</span>}
-                  </td>
-                  <td onClick={() => onOpen(u.activity_member_id)} style={{ cursor: "pointer", padding: "10px 8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                      <span style={{ width: 26, height: 26, flex: "none", borderRadius: "50%", background: dark ? "rgba(143,180,217,.16)" : "rgba(47,111,159,.12)", color: t.accent, display: "grid", placeItems: "center", fontSize: 10, fontWeight: 600, fontFamily: HEAD }}>{initials(u.member_name)}</span>
-                      <span style={{ color: u.member_name ? t.text : t.subtle }}>{u.member_name || NO_NAME}</span>
+                  <td onClick={() => onOpen(u.activity_member_id)} className="cursor-pointer px-2 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <span className="grid h-7 w-7 flex-none place-items-center rounded-full bg-purple-100 font-head text-[10px] font-semibold text-purple-600">{initials(u.member_name)}</span>
+                      <span className={u.member_name ? "" : "text-gray-400"}>{u.member_name || NO_NAME}</span>
                     </div>
                   </td>
-                  <td style={{ padding: "10px 8px", color: u.mobile_no ? t.text : t.warn }}>{u.mobile_no || "missing"}</td>
-                  <td style={{ padding: "10px 8px" }}>{u.role_name ? <RoleBadge t={t} dark={dark} label={u.role_name} /> : <span style={{ color: t.subtle, fontSize: 11 }}>—</span>}</td>
-                  <td style={{ padding: "10px 8px", fontSize: 12, color: t.subtle }}>{u.level_name ? `${u.level_name} · ${u.location_value}` : "—"}</td>
-                  <td style={{ padding: "10px 8px" }}><StatusPill t={t} active={u.is_acitve === "Y"} /></td>
-                  <td style={{ padding: "10px 8px", fontSize: 12, color: t.subtle, whiteSpace: "nowrap" }}>{fmtDate(u.inserted_time)}</td>
-                  <td style={{ padding: "8px 14px", textAlign: "right", whiteSpace: "nowrap" }}>
-                    <button className="ac-btn" title="View" onClick={() => onOpen(u.activity_member_id)} style={iconBtn(t)}><Eye size={15} /></button>
-                    <button className="ac-btn" title="Reset OTP login" onClick={() => onReset(u)} style={iconBtn(t)}><KeyRound size={15} /></button>
+                  <td className={cn("px-2 py-2.5", u.mobile_no ? "" : "text-amber-600")}>{u.mobile_no || "missing"}</td>
+                  <td className="px-2 py-2.5">{u.role_name ? <RoleBadge label={u.role_name} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
+                  <td className="px-2 py-2.5 text-xs text-gray-500">{u.level_name ? `${u.level_name} · ${u.location_value}` : "—"}</td>
+                  <td className="px-2 py-2.5"><StatusPill active={u.is_acitve === "Y"} /></td>
+                  <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{fmtDate(u.inserted_time)}</td>
+                  <td className="whitespace-nowrap px-4 py-2 text-right">
+                    <button title="View" onClick={() => onOpen(u.activity_member_id)} className="ml-0.5 inline-grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-purple-100 hover:text-purple-600"><Eye size={15} /></button>
+                    <button title="Reset OTP login" onClick={() => onReset(u)} className="ml-0.5 inline-grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-purple-100 hover:text-purple-600"><KeyRound size={15} /></button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        {rows.length === 0 && <div style={{ padding: 34, textAlign: "center", color: t.subtle, fontSize: 13 }}>No logins match these filters.</div>}
-        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 14px", borderTop: `1px solid ${t.divider}`, fontSize: 12, color: t.subtle }}>
+        {rows.length === 0 && <div className="p-9 text-center text-sm text-gray-400">No logins match these filters.</div>}
+        <div className="flex justify-between border-t border-gray-100 px-4 py-2.5 text-xs text-gray-400">
           <span>Showing {rows.length} of {total} logins</span>
           <span>Live data</span>
         </div>
@@ -562,24 +591,15 @@ function UsersScreen({ t, dark, rows, total, filters, setFilters, selected, setS
     </div>
   );
 }
-function Field({ t, label, children }) {
-  return <label style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 130 }}>
-    <span style={{ fontSize: 11, color: t.subtle }}>{label}</span>{children}
-  </label>;
-}
-const secBtn = (t) => ({ padding: "7px 12px", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface, color: t.text, fontSize: 12.5 });
-const iconBtn = (t) => ({ width: 30, height: 30, borderRadius: 3, background: "transparent", color: t.subtle, display: "inline-grid", placeItems: "center", marginLeft: 2 });
 
 // --- DETAIL (draft + Save) --------------------------------------------------
-function DetailScreen({ t, dark, u, groups, onBack, onSave, onReset }) {
-  // Local draft. Nothing propagates to the parent until Save is pressed.
+function DetailScreen({ u, groups, onBack, onSave, onReset }) {
   const [draft, setDraft] = useState(u);
   const dirty = JSON.stringify(draft) !== JSON.stringify(u);
 
   const grp = draft.group_id ? groups.find((g) => g.user_group_id === draft.group_id) : null;
   const inheritedIds = new Set(grp ? grp.component_ids : []);
   const effective = effectiveComponents(draft, groups);
-  // Components the admin can still add personally = catalogue minus inherited minus personal.
   const addable = COMPONENTS.filter((c) => !inheritedIds.has(c.id) && !draft.component_ids.includes(c.id));
   const locList = draft.level_id === 5 ? CONSTITUENCIES : draft.level_id === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
 
@@ -588,127 +608,119 @@ function DetailScreen({ t, dark, u, groups, onBack, onSave, onReset }) {
   const setLevel = (id) => { const l = USER_LEVELS.find((x) => x.id === id); set({ level_id: id, level_name: l.name, location_value: "" }); };
   const addPersonal = (id) => set({ component_ids: [...draft.component_ids, id].sort((a, b) => a - b) });
   const removePersonal = (id) => set({ component_ids: draft.component_ids.filter((x) => x !== id) });
-  const input = { background: t.surface2, border: `1px solid ${t.divider}`, borderRadius: 3, color: t.text, padding: "7px 9px", fontSize: 13, fontFamily: BODY, width: "100%" };
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
-        <button className="ac-btn" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", color: t.subtle, fontSize: 13 }}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-purple-600">
           <ChevronLeft size={16} /> Back to logins
         </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {dirty && <span style={{ fontSize: 12, color: t.warn, display: "flex", alignItems: "center", gap: 5 }}><AlertTriangle size={13} /> Unsaved changes</span>}
-          <button className="ac-btn" disabled={!dirty} onClick={() => setDraft(u)}
-            style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 13px", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface, color: dirty ? t.text : t.subtle, fontSize: 13, opacity: dirty ? 1 : 0.5, cursor: dirty ? "pointer" : "default" }}>
-            <RotateCcw size={14} /> Discard
-          </button>
-          <button className="ac-btn" disabled={!dirty} onClick={() => onSave(draft)}
-            style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 3, border: "none", background: dirty ? t.accent : t.surface2, color: dirty ? (dark ? t.bg : "#fff") : t.subtle, fontWeight: 600, fontSize: 13, cursor: dirty ? "pointer" : "default" }}>
-            <Save size={14} /> Save changes
-          </button>
+        <div className="flex items-center gap-2.5">
+          {dirty && <span className="flex items-center gap-1.5 text-xs text-amber-600"><AlertTriangle size={13} /> Unsaved changes</span>}
+          <button disabled={!dirty} onClick={() => setDraft(u)} className={SECONDARY}><RotateCcw size={14} /> Discard</button>
+          <button disabled={!dirty} onClick={() => onSave(draft)} className={PRIMARY}><Save size={14} /> Save changes</button>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 18, alignItems: "start" }}>
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[320px_1fr]">
         {/* Identity + editable role/scope */}
-        <Card t={t} style={{ padding: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-            <div style={{ width: 60, height: 60, flex: "none", borderRadius: "50%", background: t.accent, color: dark ? t.bg : "#fff", display: "grid", placeItems: "center", fontFamily: HEAD, fontWeight: 700, fontSize: 22 }}>{initials(draft.member_name)}</div>
-            <div style={{ minWidth: 0 }}>
-              <h2 style={{ margin: 0, fontFamily: HEAD, fontSize: 17, lineHeight: 1.2 }}>{draft.member_name || NO_NAME}</h2>
-              <div style={{ fontSize: 12, color: t.accent, marginTop: 2 }}>{draft.role_name || "No role"}</div>
+        <Card className="p-6">
+          <div className="mb-4 flex items-center gap-3">
+            <div className="grid h-16 w-16 flex-none place-items-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 font-head text-[22px] font-bold text-white shadow-md">{initials(draft.member_name)}</div>
+            <div className="min-w-0">
+              <h2 className="font-head text-[17px] font-semibold leading-tight">{draft.member_name || NO_NAME}</h2>
+              <div className="mt-0.5 text-xs text-purple-600">{draft.role_name || "No role"}</div>
             </div>
           </div>
-          <StatusPill t={t} active={draft.is_acitve === "Y"} />
+          <StatusPill active={draft.is_acitve === "Y"} />
 
-          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 9, fontSize: 13 }}>
-            <KV t={t} k="Membership ID" v={draft.membership_id || "— none —"} mono />
-            <KV t={t} k="Cadre ID" v={draft.tdp_cadre_id ? `#${draft.tdp_cadre_id}` : "unresolved"} mono />
-            <KV t={t} k="Login ID" v={`#${draft.activity_member_id}`} mono />
+          <div className="mt-4 flex flex-col gap-2.5 text-sm">
+            <KV k="Membership ID" v={draft.membership_id || "— none —"} mono />
+            <KV k="Cadre ID" v={draft.tdp_cadre_id ? `#${draft.tdp_cadre_id}` : "unresolved"} mono />
+            <KV k="Login ID" v={`#${draft.activity_member_id}`} mono />
           </div>
 
-          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 11 }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Mobile (OTP)</span>
-              <input value={draft.mobile_no || ""} onChange={(e) => set({ mobile_no: e.target.value || null })} style={input} placeholder="9xxxxxxxxx" /></label>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Role</span>
-              <select value={draft.role_id} onChange={(e) => setRole(+e.target.value)} style={input}>
+          <div className="mt-4 flex flex-col gap-3">
+            <label className="flex flex-col gap-1.5"><span className={LABEL}>Mobile (OTP)</span>
+              <input value={draft.mobile_no || ""} onChange={(e) => set({ mobile_no: e.target.value || null })} className={INPUT} placeholder="9xxxxxxxxx" /></label>
+            <label className="flex flex-col gap-1.5"><span className={LABEL}>Role</span>
+              <select value={draft.role_id} onChange={(e) => setRole(+e.target.value)} className={INPUT}>
                 {USER_TYPES.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}
               </select></label>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Scope level</span>
-              <select value={draft.level_id} onChange={(e) => setLevel(+e.target.value)} style={input}>
+            <label className="flex flex-col gap-1.5"><span className={LABEL}>Scope level</span>
+              <select value={draft.level_id} onChange={(e) => setLevel(+e.target.value)} className={INPUT}>
                 {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
               </select></label>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Location</span>
-              <select value={draft.location_value} onChange={(e) => set({ location_value: e.target.value })} style={input}>
+            <label className="flex flex-col gap-1.5"><span className={LABEL}>Location</span>
+              <select value={draft.location_value} onChange={(e) => set({ location_value: e.target.value })} className={INPUT}>
                 <option value="">Select…</option>
                 {locList.map((l) => <option key={l} value={l}>{l}</option>)}
               </select></label>
-            <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Group</span>
-              <select value={draft.group_id || ""} onChange={(e) => set({ group_id: e.target.value ? +e.target.value : null })} style={input}>
+            <label className="flex flex-col gap-1.5"><span className={LABEL}>Group</span>
+              <select value={draft.group_id || ""} onChange={(e) => set({ group_id: e.target.value ? +e.target.value : null })} className={INPUT}>
                 <option value="">No group</option>
                 {groups.map((g) => <option key={g.user_group_id} value={g.user_group_id}>{g.notes}</option>)}
               </select></label>
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
-            <button className="ac-btn" onClick={() => set({ is_acitve: draft.is_acitve === "Y" ? "N" : "Y" })} style={{ flex: 1, padding: "9px 0", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface2, color: t.text, fontSize: 13 }}>
+          <div className="mt-5 flex gap-2">
+            <button onClick={() => set({ is_acitve: draft.is_acitve === "Y" ? "N" : "Y" })} className={cn(SECONDARY, "flex-1")}>
               {draft.is_acitve === "Y" ? "Deactivate" : "Activate"}
             </button>
-            <button className="ac-btn" onClick={onReset} style={{ flex: 1, padding: "9px 0", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface2, color: t.text, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-              <KeyRound size={14} /> Reset OTP
-            </button>
+            <button onClick={onReset} className={cn(SECONDARY, "flex-1")}><KeyRound size={14} /> Reset OTP</button>
           </div>
         </Card>
 
         {/* Components */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card t={t} style={{ padding: 18 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <SectionTitle t={t} icon={<Layers size={14} />}>Effective access ({effective.length})</SectionTitle>
-              {grp && <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 10, background: `${t.accent}22`, color: t.accent700, display: "flex", alignItems: "center", gap: 5 }}><FolderTree size={11} /> {grp.notes}</span>}
+        <div className="flex flex-col gap-5">
+          <Card className="p-6">
+            <div className="flex items-center justify-between">
+              <SectionTitle icon={<Layers size={14} />}>Effective access ({effective.length})</SectionTitle>
+              {grp && <span className="flex items-center gap-1.5 rounded-full bg-purple-100 px-2.5 py-0.5 text-[11px] font-medium text-purple-700"><FolderTree size={11} /> {grp.notes}</span>}
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
-              {effective.length === 0 && <span style={{ fontSize: 13, color: t.warn }}>No dashboards assigned — this account opens to an empty view.</span>}
+            <div className="mt-3.5 flex flex-wrap gap-2">
+              {effective.length === 0 && <span className="text-sm text-amber-600">No dashboards assigned — this account opens to an empty view.</span>}
               {effective.map(({ id, component, inherited, personal }) => {
-                const lockedOnly = inherited && !personal; // from group, cannot remove here
+                const lockedOnly = inherited && !personal;
                 return (
-                  <span key={id}
-                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 3, fontSize: 12,
-                      border: `1px solid ${lockedOnly ? t.divider : t.accent}`,
-                      background: lockedOnly ? (dark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.03)") : (dark ? "rgba(143,180,217,.12)" : "rgba(47,111,159,.08)"),
-                      color: lockedOnly ? t.subtle : t.text }}>
+                  <span key={id} className={cn(
+                    "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs",
+                    lockedOnly
+                      ? "border-gray-200 bg-gray-50 text-gray-500"
+                      : "border-purple-300 bg-purple-50 text-gray-800",
+                  )}>
                     {inherited
-                      ? <span title="Inherited from group" style={{ fontSize: 9, letterSpacing: ".04em", padding: "1px 5px", borderRadius: 8, background: `${t.accent}22`, color: t.accent700 }}>GROUP</span>
-                      : <Check size={13} style={{ color: t.accent }} />}
+                      ? <span title="Inherited from group" className="rounded bg-purple-200/70 px-1.5 py-px text-[9px] tracking-wide text-purple-700">GROUP</span>
+                      : <Check size={13} className="text-purple-500" />}
                     {componentLabel(component)}
                     {personal && !inherited && (
-                      <button className="ac-btn" onClick={() => removePersonal(id)} title="Remove personal grant" style={{ background: "transparent", color: t.subtle, marginLeft: 2, display: "flex" }}><X size={12} /></button>
+                      <button onClick={() => removePersonal(id)} title="Remove personal grant" className="ml-0.5 flex text-gray-400 hover:text-red-500"><X size={12} /></button>
                     )}
                   </span>
                 );
               })}
             </div>
-            {grp && <div style={{ fontSize: 11, color: t.subtle, marginTop: 10 }}>Grey = inherited from group (change on the group, not here). Blue = personal, removable.</div>}
+            {grp && <div className="mt-2.5 text-[11px] text-gray-400">Grey = inherited from group (change on the group, not here). Purple = personal, removable.</div>}
           </Card>
 
-          <Card t={t} style={{ padding: 18 }}>
-            <SectionTitle t={t} icon={<Plus size={14} />}>Add personal component</SectionTitle>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 14 }}>
-              {addable.length === 0 && <span style={{ fontSize: 12.5, color: t.subtle }}>Nothing left to add — all components are already granted or inherited.</span>}
+          <Card className="p-6">
+            <SectionTitle icon={<Plus size={14} />}>Add personal component</SectionTitle>
+            <div className="mt-3.5 flex flex-wrap gap-2">
+              {addable.length === 0 && <span className="text-[12.5px] text-gray-400">Nothing left to add — all components are already granted or inherited.</span>}
               {addable.map((c) => (
-                <button key={c.id} className="ac-btn" onClick={() => addPersonal(c.id)} title="Grant to this user only"
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 3, border: `1px dashed ${t.divider}`, background: "transparent", color: t.subtle, fontSize: 12 }}>
+                <button key={c.id} onClick={() => addPersonal(c.id)} title="Grant to this user only"
+                  className="flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-2.5 py-1.5 text-xs text-gray-500 transition-colors hover:border-purple-400 hover:text-purple-600">
                   <Plus size={13} /> {componentLabel(c)}
                 </button>
               ))}
             </div>
           </Card>
 
-          <Card t={t} style={{ padding: 18 }}>
-            <SectionTitle t={t} icon={<ClipboardList size={14} />}>Record</SectionTitle>
-            <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13 }}>
-              <KV t={t} k="Created" v={fmtDateTime(u.inserted_time)} />
-              <KV t={t} k="Last updated by" v={u.updated_by ? `#${u.updated_by}` : "—"} mono />
+          <Card className="p-6">
+            <SectionTitle icon={<ClipboardList size={14} />}>Record</SectionTitle>
+            <div className="mt-3.5 grid grid-cols-2 gap-3 text-sm">
+              <KV k="Created" v={fmtDateTime(u.inserted_time)} />
+              <KV k="Last updated by" v={u.updated_by ? `#${u.updated_by}` : "—"} mono />
             </div>
           </Card>
         </div>
@@ -717,47 +729,46 @@ function DetailScreen({ t, dark, u, groups, onBack, onSave, onReset }) {
   );
 }
 
-// --- GROUPS (working mock CRUD: create groups, set components, add members) --
-function GroupsScreen({ t, dark, groups, members, activeGroupId, setActiveGroupId, onSaveGroup, onDeleteGroup, onSetMemberGroup }) {
+// --- GROUPS (working mock CRUD) ---------------------------------------------
+function GroupsScreen({ groups, members, activeGroupId, setActiveGroupId, onSaveGroup, onDeleteGroup, onSetMemberGroup }) {
   const active = groups.find((g) => g.user_group_id === activeGroupId) || null;
   if (active) {
-    return <GroupEditor t={t} dark={dark} group={active} members={members} groups={groups}
+    return <GroupEditor group={active} members={members} groups={groups}
       onBack={() => setActiveGroupId(null)} onSave={onSaveGroup} onDelete={onDeleteGroup} onSetMemberGroup={onSetMemberGroup} />;
   }
   const nextId = () => (groups.reduce((m, g) => Math.max(m, g.user_group_id), 0) + 1);
   const count = (gid) => members.filter((m) => m.group_id === gid).length;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <Card t={t} style={{ padding: 14, display: "flex", gap: 11, alignItems: "flex-start", borderLeft: `3px solid ${t.warn}` }}>
-        <AlertTriangle size={16} style={{ color: t.warn, flex: "none", marginTop: 1 }} />
-        <div style={{ fontSize: 12.5, color: t.subtle, lineHeight: 1.55 }}>
-          <strong style={{ color: t.text }}>Requires two new tables.</strong> Groups here assign components and members, but the current schema has no <code style={{ color: t.accent700 }}>user_group_member</code> or <code style={{ color: t.accent700 }}>user_group_component</code> table. This is a working mock — persistence needs those tables built first.
+    <div className="flex flex-col gap-4">
+      <Card className="flex items-start gap-3 border-l-4 border-l-amber-400 p-4">
+        <AlertTriangle size={16} className="mt-0.5 flex-none text-amber-500" />
+        <div className="text-[12.5px] leading-relaxed text-gray-500">
+          <strong className="text-gray-800">Requires two new tables.</strong> Groups here assign components and members, but the current schema has no <code className="text-purple-600">user_group_member</code> or <code className="text-purple-600">user_group_component</code> table. This is a working mock — persistence needs those tables built first.
         </div>
       </Card>
 
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <button className="ac-btn" onClick={() => { onSaveGroup({ user_group_id: nextId(), notes: "NEW_GROUP", component_ids: [] }); setActiveGroupId(nextId()); }}
-          style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 15px", borderRadius: 3, background: t.accent, color: dark ? t.bg : "#fff", fontWeight: 600, fontSize: 13 }}>
+      <div className="flex justify-end">
+        <button onClick={() => { onSaveGroup({ user_group_id: nextId(), notes: "NEW_GROUP", component_ids: [] }); setActiveGroupId(nextId()); }} className={PRIMARY}>
           <Plus size={16} /> Create group
         </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(250px,1fr))", gap: 14 }}>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4">
         {groups.map((g) => (
-          <Card key={g.user_group_id} t={t} style={{ padding: 16, cursor: "pointer" }}>
+          <Card key={g.user_group_id} className={cn(CARD_HOVER, "cursor-pointer p-5")}>
             <div onClick={() => setActiveGroupId(g.user_group_id)}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <span style={{ width: 32, height: 32, display: "grid", placeItems: "center", borderRadius: 3, border: `1px solid ${t.divider}`, color: t.accent }}><FolderTree size={16} /></span>
-                <span style={{ fontSize: 10.5, color: t.subtle, fontFamily: "ui-monospace,monospace" }}>#{g.user_group_id}</span>
+              <div className="flex items-start justify-between">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-purple-50 text-purple-500"><FolderTree size={16} /></span>
+                <span className="font-mono text-[10.5px] text-gray-400">#{g.user_group_id}</span>
               </div>
-              <div style={{ fontFamily: HEAD, fontWeight: 600, fontSize: 14, marginTop: 12, wordBreak: "break-word" }}>{g.notes}</div>
-              <div style={{ display: "flex", gap: 16, marginTop: 12 }}>
-                <div><div style={{ fontFamily: HEAD, fontWeight: 700, fontSize: 18 }}>{count(g.user_group_id)}</div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".05em", color: t.subtle }}>Members</div></div>
-                <div><div style={{ fontFamily: HEAD, fontWeight: 700, fontSize: 18 }}>{g.component_ids.length}</div><div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: ".05em", color: t.subtle }}>Components</div></div>
+              <div className="mt-3 break-words font-head text-sm font-semibold">{g.notes}</div>
+              <div className="mt-3 flex gap-4">
+                <div><div className="font-head text-lg font-bold">{count(g.user_group_id)}</div><div className="text-[10px] uppercase tracking-wide text-gray-400">Members</div></div>
+                <div><div className="font-head text-lg font-bold">{g.component_ids.length}</div><div className="text-[10px] uppercase tracking-wide text-gray-400">Components</div></div>
               </div>
             </div>
-            <button className="ac-btn" onClick={() => setActiveGroupId(g.user_group_id)} style={{ marginTop: 14, width: "100%", padding: "7px 0", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface2, color: t.text, fontSize: 12.5 }}>Manage</button>
+            <button onClick={() => setActiveGroupId(g.user_group_id)} className={cn(SECONDARY, "mt-4 w-full")}>Manage</button>
           </Card>
         ))}
       </div>
@@ -765,11 +776,10 @@ function GroupsScreen({ t, dark, groups, members, activeGroupId, setActiveGroupI
   );
 }
 
-function GroupEditor({ t, dark, group, members, groups, onBack, onSave, onDelete, onSetMemberGroup }) {
+function GroupEditor({ group, members, groups, onBack, onSave, onDelete, onSetMemberGroup }) {
   const [draft, setDraft] = useState(group);
   const dirty = JSON.stringify(draft) !== JSON.stringify(group);
   const [memberQuery, setMemberQuery] = useState("");
-  const input = { background: t.surface2, border: `1px solid ${t.divider}`, borderRadius: 3, color: t.text, padding: "8px 10px", fontSize: 13, fontFamily: BODY };
 
   const inGroup = members.filter((m) => m.group_id === group.user_group_id);
   const q = memberQuery.trim().toLowerCase();
@@ -783,69 +793,71 @@ function GroupEditor({ t, dark, group, members, groups, onBack, onSave, onDelete
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, gap: 12, flexWrap: "wrap" }}>
-        <button className="ac-btn" onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", color: t.subtle, fontSize: 13 }}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-purple-600">
           <ChevronLeft size={16} /> All groups
         </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <button className="ac-btn" onClick={() => onDelete(group.user_group_id)} style={{ padding: "8px 13px", borderRadius: 3, border: `1px solid ${t.divider}`, background: "transparent", color: t.bad, fontSize: 13 }}>Delete group</button>
-          {dirty && <span style={{ fontSize: 12, color: t.warn, display: "flex", alignItems: "center", gap: 5 }}><AlertTriangle size={13} /> Unsaved</span>}
-          <button className="ac-btn" disabled={!dirty} onClick={() => onSave(draft)}
-            style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 16px", borderRadius: 3, border: "none", background: dirty ? t.accent : t.surface2, color: dirty ? (dark ? t.bg : "#fff") : t.subtle, fontWeight: 600, fontSize: 13, cursor: dirty ? "pointer" : "default" }}>
-            <Save size={14} /> Save group
-          </button>
+        <div className="flex items-center gap-2.5">
+          <button onClick={() => onDelete(group.user_group_id)} className="rounded-xl border border-red-200 px-3.5 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50">Delete group</button>
+          {dirty && <span className="flex items-center gap-1.5 text-xs text-amber-600"><AlertTriangle size={13} /> Unsaved</span>}
+          <button disabled={!dirty} onClick={() => onSave(draft)} className={PRIMARY}><Save size={14} /> Save group</button>
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, alignItems: "start" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Card t={t} style={{ padding: 18 }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={lbl(t)}>Group name</span>
-              <input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} style={{ ...input, width: "100%", fontFamily: HEAD, fontWeight: 600 }} />
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
+        <div className="flex flex-col gap-5">
+          <Card className="p-6">
+            <label className="flex flex-col gap-1.5">
+              <span className={LABEL}>Group name</span>
+              <input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} className={cn(INPUT, "font-head font-semibold")} />
             </label>
           </Card>
 
-          <Card t={t} style={{ padding: 18 }}>
-            <SectionTitle t={t} icon={<Layers size={14} />}>What this group can view ({draft.component_ids.length})</SectionTitle>
-            <div style={{ fontSize: 12, color: t.subtle, margin: "8px 0 12px" }}>Every member inherits these. They can still be given extra components individually.</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+          <Card className="p-6">
+            <SectionTitle icon={<Layers size={14} />}>What this group can view ({draft.component_ids.length})</SectionTitle>
+            <div className="my-2.5 text-xs text-gray-500">Every member inherits these. They can still be given extra components individually.</div>
+            <div className="flex flex-wrap gap-2">
               {COMPONENTS.map((c) => {
                 const on = draft.component_ids.includes(c.id);
-                return <button key={c.id} className="ac-btn" onClick={() => toggleComp(c.id)}
-                  style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 3, fontSize: 11.5, border: `1px solid ${on ? t.accent : t.divider}`, background: on ? (dark ? "rgba(143,180,217,.14)" : "rgba(47,111,159,.08)") : "transparent", color: on ? t.text : t.subtle }}>
-                  {on ? <Check size={12} style={{ color: t.accent }} /> : <Plus size={12} />} {componentLabel(c)}
-                </button>;
+                return (
+                  <button key={c.id} onClick={() => toggleComp(c.id)} className={cn(
+                    "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition-colors",
+                    on ? "border-purple-300 bg-purple-50 text-gray-800"
+                       : "border-gray-200 text-gray-500 hover:border-purple-300",
+                  )}>
+                    {on ? <Check size={12} className="text-purple-500" /> : <Plus size={12} />} {componentLabel(c)}
+                  </button>
+                );
               })}
             </div>
           </Card>
         </div>
 
-        <Card t={t} style={{ padding: 18 }}>
-          <SectionTitle t={t} icon={<Users size={14} />}>Members ({inGroup.length})</SectionTitle>
-          <div style={{ position: "relative", margin: "12px 0" }}>
-            <Search size={15} style={{ position: "absolute", left: 10, top: 10, color: t.subtle }} />
-            <input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="Search a login to add…" style={{ ...input, width: "100%", paddingLeft: 32 }} />
+        <Card className="p-6">
+          <SectionTitle icon={<Users size={14} />}>Members ({inGroup.length})</SectionTitle>
+          <div className="group relative my-3">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-purple-500" />
+            <input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="Search a login to add…" className={cn(INPUT, "pl-9")} />
           </div>
           {candidates.length > 0 && (
-            <div style={{ border: `1px solid ${t.divider}`, borderRadius: 4, marginBottom: 12, overflow: "hidden" }}>
+            <div className="mb-3 overflow-hidden rounded-xl border border-gray-200">
               {candidates.map((m) => (
-                <div key={m.activity_member_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderBottom: `1px solid ${t.divider}` }}>
-                  <span style={{ fontSize: 13 }}>{m.member_name} <span style={{ color: t.subtle, fontSize: 11 }}>{m.membership_id || "no MID"}{m.group_id ? " · in another group" : ""}</span></span>
-                  <button className="ac-btn" onClick={() => { onSetMemberGroup(m.activity_member_id, group.user_group_id); setMemberQuery(""); }} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 3, border: `1px solid ${t.accent}`, background: "transparent", color: t.accent700 }}>Add</button>
+                <div key={m.activity_member_id} className="flex items-center justify-between border-b border-gray-100 px-3 py-2 last:border-b-0">
+                  <span className="text-sm">{m.member_name} <span className="text-[11px] text-gray-400">{m.membership_id || "no MID"}{m.group_id ? " · in another group" : ""}</span></span>
+                  <button onClick={() => { onSetMemberGroup(m.activity_member_id, group.user_group_id); setMemberQuery(""); }} className="rounded-lg border border-purple-300 px-2.5 py-1 text-xs font-medium text-purple-600 transition-colors hover:bg-purple-50">Add</button>
                 </div>
               ))}
             </div>
           )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {inGroup.length === 0 && <span style={{ fontSize: 12.5, color: t.subtle }}>No members yet. Search above to add logins.</span>}
+          <div className="flex flex-col gap-2">
+            {inGroup.length === 0 && <span className="text-[12.5px] text-gray-400">No members yet. Search above to add logins.</span>}
             {inGroup.map((m) => (
-              <div key={m.activity_member_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", borderRadius: 4, background: t.surface2 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                  <span style={{ width: 26, height: 26, borderRadius: "50%", background: dark ? "rgba(143,180,217,.16)" : "rgba(47,111,159,.12)", color: t.accent, display: "grid", placeItems: "center", fontSize: 10, fontWeight: 600, fontFamily: HEAD }}>{initials(m.member_name)}</span>
-                  <span style={{ fontSize: 13 }}>{m.member_name}<span style={{ color: t.subtle, fontSize: 11 }}> · {m.role_name}</span></span>
+              <div key={m.activity_member_id} className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2">
+                <div className="flex items-center gap-2.5">
+                  <span className="grid h-7 w-7 place-items-center rounded-full bg-purple-100 font-head text-[10px] font-semibold text-purple-600">{initials(m.member_name)}</span>
+                  <span className="text-sm">{m.member_name}<span className="text-[11px] text-gray-400"> · {m.role_name}</span></span>
                 </div>
-                <button className="ac-btn" onClick={() => onSetMemberGroup(m.activity_member_id, null)} title="Remove from group" style={{ background: "transparent", color: t.subtle, display: "flex" }}><X size={15} /></button>
+                <button onClick={() => onSetMemberGroup(m.activity_member_id, null)} title="Remove from group" className="flex text-gray-400 hover:text-red-500"><X size={15} /></button>
               </div>
             ))}
           </div>
@@ -856,89 +868,52 @@ function GroupEditor({ t, dark, group, members, groups, onBack, onSave, onDelete
 }
 
 // --- OTP MODAL (mock 6-digit generator) -------------------------------------
-function OtpModal({ t, dark, data, onRegenerate, onClose, onSent }) {
+function OtpModal({ data, onRegenerate, onClose, onSent }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {
     try { navigator.clipboard?.writeText(data.code); } catch (e) { /* clipboard unavailable */ }
     setCopied(true); setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "grid", placeItems: "center", padding: 20, zIndex: 45 }}>
-      <div onClick={(e) => e.stopPropagation()} className="fade" style={{ width: "min(400px,100%)", background: t.surface, border: `1px solid ${t.divider}`, borderRadius: 6 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${t.divider}` }}>
-          <h3 style={{ margin: 0, fontFamily: HEAD, fontSize: 16 }}>One-time passcode</h3>
-          <button className="ac-btn" onClick={onClose} style={{ background: "transparent", color: t.subtle }}><X size={18} /></button>
+    <div onClick={onClose} className="fixed inset-0 z-40 grid place-items-center bg-gray-900/50 p-5 backdrop-blur-sm">
+      <div onClick={(e) => e.stopPropagation()} className="w-[min(400px,100%)] animate-fade-in-up overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <h3 className="font-head text-base font-semibold">One-time passcode</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
-        <div style={{ padding: 20 }}>
-          <div style={{ fontSize: 13, color: t.subtle }}>{data.member.member_name}</div>
-          <div style={{ fontSize: 12, color: t.subtle, marginBottom: 14 }}>
-            Deliver to {data.member.mobile_no ? "••• " + data.member.mobile_no.slice(-4) : <span style={{ color: t.warn }}>no mobile on file</span>}
+        <div className="p-5">
+          <div className="text-sm text-gray-600">{data.member.member_name}</div>
+          <div className="mb-3.5 text-xs text-gray-500">
+            Deliver to {data.member.mobile_no ? "••• " + data.member.mobile_no.slice(-4) : <span className="text-amber-600">no mobile on file</span>}
           </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 14 }}>
+          <div className="mb-3.5 flex justify-center gap-2">
             {data.code.split("").map((d, i) => (
-              <span key={i} style={{ width: 42, height: 52, display: "grid", placeItems: "center", borderRadius: 4, border: `1px solid ${t.divider}`, background: t.surface2, fontFamily: HEAD, fontWeight: 700, fontSize: 24 }}>{d}</span>
+              <span key={i} className="grid w-10 place-items-center rounded-xl border border-purple-200 bg-purple-50 font-head text-2xl font-bold text-purple-700" style={{ height: 52 }}>{d}</span>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="ac-btn" onClick={onRegenerate} style={{ flex: 1, padding: "8px 0", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface2, color: t.text, fontSize: 12.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><RotateCcw size={13} /> Regenerate</button>
-            <button className="ac-btn" onClick={copy} style={{ flex: 1, padding: "8px 0", borderRadius: 3, border: `1px solid ${t.divider}`, background: t.surface2, color: t.text, fontSize: 12.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}><Copy size={13} /> {copied ? "Copied" : "Copy"}</button>
+          <div className="flex gap-2">
+            <button onClick={onRegenerate} className={cn(SECONDARY, "flex-1")}><RotateCcw size={13} /> Regenerate</button>
+            <button onClick={copy} className={cn(SECONDARY, "flex-1")}><Copy size={13} /> {copied ? "Copied" : "Copy"}</button>
           </div>
-          <div style={{ marginTop: 14, padding: "9px 11px", background: dark ? "rgba(224,176,98,.1)" : "rgba(165,116,31,.08)", borderRadius: 3, fontSize: 11, color: t.warn, lineHeight: 1.5, display: "flex", gap: 7 }}>
-            <AlertTriangle size={13} style={{ flex: "none", marginTop: 1 }} />
+          <div className="mt-3.5 flex gap-2 rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] leading-relaxed text-amber-700">
+            <AlertTriangle size={13} className="mt-0.5 flex-none" />
             Demo only. Real OTPs must be generated, delivered and expired server-side — never in the browser.
           </div>
         </div>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, padding: "14px 20px", borderTop: `1px solid ${t.divider}` }}>
-          <button className="ac-btn" onClick={onClose} style={{ padding: "9px 16px", borderRadius: 3, border: `1px solid ${t.divider}`, background: "transparent", color: t.text, fontSize: 13 }}>Close</button>
-          <button className="ac-btn" onClick={onSent} style={{ padding: "9px 18px", borderRadius: 3, border: "none", background: t.accent, color: dark ? t.bg : "#fff", fontWeight: 600, fontSize: 13 }}>Mark as sent</button>
+        <div className="flex justify-end gap-2.5 border-t border-gray-100 px-5 py-3.5">
+          <button onClick={onClose} className={SECONDARY}>Close</button>
+          <button onClick={onSent} className={PRIMARY}>Mark as sent</button>
         </div>
       </div>
     </div>
   );
 }
-function KV({ t, k, v, mono }) {
-  return <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-    <span style={{ color: t.subtle }}>{k}</span>
-    <span style={{ textAlign: "right", wordBreak: "break-word", fontFamily: mono ? "ui-monospace,monospace" : BODY }}>{v}</span>
-  </div>;
-}
-
-// --- AUDIT (honest: driven only by inserted_time / updated_by) [§5.4] -------
-function AuditScreen({ t, dark, members }) {
-  const events = [...members]
-    .sort((a, b) => new Date(b.inserted_time) - new Date(a.inserted_time))
-    .slice(0, 30);
-  return (
-    <Card t={t} style={{ padding: 0, overflow: "hidden" }}>
-      <div style={{ padding: "14px 18px", borderBottom: `1px solid ${t.divider}`, fontSize: 12.5, color: t.subtle, lineHeight: 1.5 }}>
-        Login accounts listed by when they were created. A full change-history log isn't available yet, so this shows creation activity only.
-      </div>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <tbody>
-          {events.map((u) => (
-            <tr key={u.activity_member_id} style={{ borderTop: `1px solid ${t.divider}` }}>
-              <td style={{ padding: "11px 18px", width: 30 }}>
-                <span style={{ width: 26, height: 26, display: "grid", placeItems: "center", borderRadius: 3, background: dark ? "rgba(143,180,217,.12)" : "rgba(47,111,159,.08)", color: t.accent }}><UserCheck size={14} /></span>
-              </td>
-              <td style={{ padding: "11px 8px" }}>
-                Login <strong>{u.member_name || NO_NAME}</strong> ({u.membership_id || "no ID"}) created{u.role_name ? <> as <RoleBadge t={t} dark={dark} label={u.role_name} /></> : ""}
-              </td>
-              <td style={{ padding: "11px 18px", textAlign: "right", fontSize: 12, color: t.subtle, whiteSpace: "nowrap" }}>{fmtDateTime(u.inserted_time)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Card>
-  );
-}
 
 // --- CREATE MODAL: MID-first stepped flow -----------------------------------
-// Step 1 lookup MID in tdp_cadre -> Step 2 details (prefilled or manual) ->
-// Step 3 role/scope/group/components -> create -> Step 4 OTP.
-function CreateModal({ t, dark, groups, onClose, onCreate, onOtp }) {
+function CreateModal({ groups, onClose, onCreate, onOtp }) {
   const [step, setStep] = useState(1);
   const [mid, setMid] = useState("");
-  const [cadre, setCadre] = useState(null);     // resolved cadre row or null
+  const [cadre, setCadre] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
@@ -949,7 +924,6 @@ function CreateModal({ t, dark, groups, onClose, onCreate, onOtp }) {
   const [comps, setComps] = useState([...STANDARD_BUNDLE]);
   const [err, setErr] = useState("");
 
-  const input = { background: t.surface2, border: `1px solid ${t.divider}`, borderRadius: 3, color: t.text, padding: "9px 11px", fontSize: 13, width: "100%", fontFamily: BODY };
   const locList = levelId === 5 ? CONSTITUENCIES : levelId === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
   const grp = groupId ? groups.find((g) => g.user_group_id === groupId) : null;
   const inheritedIds = new Set(grp ? grp.component_ids : []);
@@ -972,135 +946,137 @@ function CreateModal({ t, dark, groups, onClose, onCreate, onOtp }) {
     setErr("");
     if (!name.trim()) return setErr("Name is required.");
     if (!location) return setErr("Pick a location. A missing scope value silently yields an empty dashboard.");
-    // Personal components exclude anything inherited from the group.
     const personal = comps.filter((id) => !inheritedIds.has(id));
     const created = onCreate({
       mid: mid.trim(), tdp_cadre_id: cadre ? cadre.tdp_cadre_id : null,
       name: name.trim(), mobile: mobile.trim() || null,
       role_id: roleId, level_id: levelId, location, group_id: groupId, components: personal,
     });
-    if (created) onOtp(created); // hand straight to OTP generation
+    if (created) onOtp(created);
   }
   const toggle = (id) => setComps((c) => c.includes(id) ? c.filter((x) => x !== id) : [...c, id]);
 
   const Stepper = () => (
-    <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+    <div className="mb-1 flex gap-1.5">
       {["Membership ID", "Details", "Access"].map((s, i) => {
         const n = i + 1, on = step >= n;
-        return <div key={s} style={{ flex: 1, display: "flex", alignItems: "center", gap: 7 }}>
-          <span style={{ width: 22, height: 22, flex: "none", borderRadius: "50%", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 600, background: on ? t.accent : t.surface2, color: on ? (dark ? t.bg : "#fff") : t.subtle }}>{n}</span>
-          <span style={{ fontSize: 11.5, color: on ? t.text : t.subtle }}>{s}</span>
-        </div>;
+        return (
+          <div key={s} className="flex flex-1 items-center gap-2">
+            <span className={cn(
+              "grid h-6 w-6 flex-none place-items-center rounded-full text-[11px] font-semibold",
+              on ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-400",
+            )}>{n}</span>
+            <span className={cn("text-[11.5px]", on ? "text-gray-800" : "text-gray-400")}>{s}</span>
+          </div>
+        );
       })}
     </div>
   );
 
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", display: "grid", placeItems: "center", padding: 20, zIndex: 40 }}>
-      <div onClick={(e) => e.stopPropagation()} className="fade" style={{ width: "min(580px,100%)", maxHeight: "90vh", overflow: "auto", background: t.surface, border: `1px solid ${t.divider}`, borderRadius: 6 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${t.divider}` }}>
-          <h3 style={{ margin: 0, fontFamily: HEAD, fontSize: 17 }}>New login</h3>
-          <button className="ac-btn" onClick={onClose} style={{ background: "transparent", color: t.subtle }}><X size={18} /></button>
+    <div onClick={onClose} className="fixed inset-0 z-40 grid place-items-center bg-gray-900/50 p-5 backdrop-blur-sm">
+      <div onClick={(e) => e.stopPropagation()} className="max-h-[90vh] w-[min(580px,100%)] animate-fade-in-up overflow-auto rounded-2xl border border-gray-100 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <h3 className="font-head text-[17px] font-semibold">New login</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
         </div>
 
-        <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div className="flex flex-col gap-4 p-5">
           <Stepper />
 
           {step === 1 && (
             <>
-              <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={lbl(t)}>Membership ID</span>
-                <input autoFocus value={mid} onChange={(e) => setMid(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doLookup()} style={input} placeholder="e.g. 20481, 20482, 30017…" />
+              <label className="flex flex-col gap-1.5">
+                <span className={LABEL}>Membership ID</span>
+                <input autoFocus value={mid} onChange={(e) => setMid(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doLookup()} className={INPUT} placeholder="e.g. 20481, 20482, 30017…" />
               </label>
-              <div style={{ fontSize: 12, color: t.subtle, lineHeight: 1.5 }}>
+              <div className="text-xs leading-relaxed text-gray-500">
                 Enter a member's Membership ID to look them up. Try <strong>19457249</strong> for a match; an unknown ID lets you enter the details manually.
               </div>
-              {err && <ErrLine t={t}>{err}</ErrLine>}
+              {err && <ErrLine>{err}</ErrLine>}
             </>
           )}
 
           {step === 2 && (
             <>
               {cadre ? (
-                <Card t={t} style={{ padding: 14, borderLeft: `3px solid ${t.ok}` }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: t.ok, marginBottom: 10 }}><UserCheck size={15} /> Member found — cadre #{cadre.tdp_cadre_id}</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 13 }}>
-                    <KV t={t} k="Name" v={`${cadre.first_name} ${cadre.last_name}`} />
-                    <KV t={t} k="Mobile" v={cadre.mobile_no} />
-                    <KV t={t} k="Gender" v={cadre.gender || "—"} />
-                    <KV t={t} k="Constituency ID" v={cadre.constituency_id ?? "—"} />
-                    <KV t={t} k="Payment" v={cadre.payment_status} />
+                <Card className="border-l-4 border-l-green-400 p-4">
+                  <div className="mb-2.5 flex items-center gap-2 text-[12.5px] text-green-600"><UserCheck size={15} /> Member found — cadre #{cadre.tdp_cadre_id}</div>
+                  <div className="grid grid-cols-2 gap-2.5 text-sm">
+                    <KV k="Name" v={`${cadre.first_name} ${cadre.last_name}`} />
+                    <KV k="Mobile" v={cadre.mobile_no} />
+                    <KV k="Gender" v={cadre.gender || "—"} />
+                    <KV k="Constituency ID" v={cadre.constituency_id ?? "—"} />
+                    <KV k="Payment" v={cadre.payment_status} />
                   </div>
                 </Card>
               ) : (
-                <Card t={t} style={{ padding: 14, borderLeft: `3px solid ${t.warn}` }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: t.warn }}><AlertTriangle size={15} /> No cadre found for MID {mid}. Enter the name manually — this login won't resolve to a cadre record.</div>
+                <Card className="border-l-4 border-l-amber-400 p-4">
+                  <div className="flex items-center gap-2 text-[12.5px] text-amber-600"><AlertTriangle size={15} /> No cadre found for MID {mid}. Enter the name manually — this login won't resolve to a cadre record.</div>
                 </Card>
               )}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Name {cadre && <span style={{ color: t.subtle }}>(from cadre)</span>}</span>
-                  <input value={name} onChange={(e) => setName(e.target.value)} readOnly={!!cadre} style={{ ...input, opacity: cadre ? 0.7 : 1 }} placeholder="Full name" /></label>
-                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Mobile (OTP)</span>
-                  <input value={mobile} onChange={(e) => setMobile(e.target.value)} style={input} placeholder="9xxxxxxxxx" /></label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Name {cadre && <span className="text-gray-400">(from cadre)</span>}</span>
+                  <input value={name} onChange={(e) => setName(e.target.value)} readOnly={!!cadre} className={cn(INPUT, cadre && "opacity-70")} placeholder="Full name" /></label>
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Mobile (OTP)</span>
+                  <input value={mobile} onChange={(e) => setMobile(e.target.value)} className={INPUT} placeholder="9xxxxxxxxx" /></label>
               </div>
-              {err && <ErrLine t={t}>{err}</ErrLine>}
+              {err && <ErrLine>{err}</ErrLine>}
             </>
           )}
 
           {step === 3 && (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Role</span>
-                  <select value={roleId} onChange={(e) => setRoleId(+e.target.value)} style={input}>{USER_TYPES.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}</select></label>
-                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Group</span>
-                  <select value={groupId || ""} onChange={(e) => setGroupId(e.target.value ? +e.target.value : null)} style={input}>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Role</span>
+                  <select value={roleId} onChange={(e) => setRoleId(+e.target.value)} className={INPUT}>{USER_TYPES.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}</select></label>
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Group</span>
+                  <select value={groupId || ""} onChange={(e) => setGroupId(e.target.value ? +e.target.value : null)} className={INPUT}>
                     <option value="">No group</option>
                     {groups.map((g) => <option key={g.user_group_id} value={g.user_group_id}>{g.notes}</option>)}
                   </select></label>
-                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Scope level</span>
-                  <select value={levelId} onChange={(e) => { setLevelId(+e.target.value); setLocation(""); }} style={input}>
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Scope level</span>
+                  <select value={levelId} onChange={(e) => { setLevelId(+e.target.value); setLocation(""); }} className={INPUT}>
                     {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}</select></label>
-                <label style={{ display: "flex", flexDirection: "column", gap: 5 }}><span style={lbl(t)}>Location</span>
-                  <select value={location} onChange={(e) => setLocation(e.target.value)} style={input}>
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Location</span>
+                  <select value={location} onChange={(e) => setLocation(e.target.value)} className={INPUT}>
                     <option value="">Select…</option>{locList.map((l) => <option key={l} value={l}>{l}</option>)}</select></label>
               </div>
 
               <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <span style={lbl(t)}>Components {grp && <span style={{ color: t.subtle }}>— grey are inherited from {grp.notes}</span>}</span>
-                  <button className="ac-btn" onClick={() => setComps([...STANDARD_BUNDLE])} style={{ fontSize: 11, padding: "4px 9px", borderRadius: 10, border: `1px solid ${t.accent}`, background: "transparent", color: t.accent700 }}>Apply standard bundle</button>
+                <div className="mb-2 flex items-center justify-between">
+                  <span className={LABEL}>Components {grp && <span className="text-gray-400">— grey are inherited from {grp.notes}</span>}</span>
+                  <button onClick={() => setComps([...STANDARD_BUNDLE])} className="rounded-full border border-purple-300 px-2.5 py-1 text-[11px] font-medium text-purple-600 transition-colors hover:bg-purple-50">Apply standard bundle</button>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                <div className="flex flex-wrap gap-2">
                   {COMPONENTS.map((c) => {
                     const inh = inheritedIds.has(c.id);
                     const on = inh || comps.includes(c.id);
-                    return <button key={c.id} className="ac-btn" onClick={() => !inh && toggle(c.id)} title={inh ? "Inherited from group" : ""}
-                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 9px", borderRadius: 3, fontSize: 11.5, cursor: inh ? "default" : "pointer",
-                        border: `1px solid ${inh ? t.divider : on ? t.accent : t.divider}`,
-                        background: inh ? (dark ? "rgba(255,255,255,.04)" : "rgba(0,0,0,.03)") : on ? (dark ? "rgba(143,180,217,.14)" : "rgba(47,111,159,.08)") : "transparent",
-                        color: inh ? t.subtle : on ? t.text : t.subtle }}>
-                      {inh ? <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 6, background: `${t.accent}22`, color: t.accent700 }}>GROUP</span> : on ? <Check size={12} style={{ color: t.accent }} /> : <Plus size={12} />} {componentLabel(c)}
-                    </button>;
+                    return (
+                      <button key={c.id} onClick={() => !inh && toggle(c.id)} title={inh ? "Inherited from group" : ""} className={cn(
+                        "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px]",
+                        inh ? "cursor-default border-gray-200 bg-gray-50 text-gray-400"
+                            : on ? "border-purple-300 bg-purple-50 text-gray-800"
+                                 : "border-gray-200 text-gray-500 hover:border-purple-300",
+                      )}>
+                        {inh ? <span className="rounded bg-purple-200/70 px-1 py-px text-[9px] text-purple-700">GROUP</span> : on ? <Check size={12} className="text-purple-500" /> : <Plus size={12} />} {componentLabel(c)}
+                      </button>
+                    );
                   })}
                 </div>
               </div>
-              {err && <ErrLine t={t}>{err}</ErrLine>}
+              {err && <ErrLine>{err}</ErrLine>}
             </>
           )}
         </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, padding: "14px 20px", borderTop: `1px solid ${t.divider}` }}>
-          <button className="ac-btn" onClick={step === 1 ? onClose : () => setStep(step - 1)} style={{ padding: "9px 16px", borderRadius: 3, border: `1px solid ${t.divider}`, background: "transparent", color: t.text, fontSize: 13 }}>{step === 1 ? "Cancel" : "Back"}</button>
-          {step === 1 && <button className="ac-btn" onClick={doLookup} style={primaryBtn(t, dark)}>Look up cadre</button>}
-          {step === 2 && <button className="ac-btn" onClick={() => { if (!name.trim()) return setErr("Name is required."); setErr(""); setStep(3); }} style={primaryBtn(t, dark)}>Next: access</button>}
-          {step === 3 && <button className="ac-btn" onClick={submit} style={primaryBtn(t, dark)}>Create & generate OTP</button>}
+        <div className="flex justify-between gap-2.5 border-t border-gray-100 px-5 py-3.5">
+          <button onClick={step === 1 ? onClose : () => setStep(step - 1)} className={SECONDARY}>{step === 1 ? "Cancel" : "Back"}</button>
+          {step === 1 && <button onClick={doLookup} className={PRIMARY}>Look up cadre</button>}
+          {step === 2 && <button onClick={() => { if (!name.trim()) return setErr("Name is required."); setErr(""); setStep(3); }} className={PRIMARY}>Next: access</button>}
+          {step === 3 && <button onClick={submit} className={PRIMARY}>Create &amp; generate OTP</button>}
         </div>
       </div>
     </div>
   );
 }
-function ErrLine({ t, children }) {
-  return <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5, color: t.bad }}><AlertTriangle size={14} /> {children}</div>;
-}
-const primaryBtn = (t, dark) => ({ padding: "9px 18px", borderRadius: 3, border: "none", background: t.accent, color: dark ? t.bg : "#fff", fontWeight: 600, fontSize: 13 });
-const lbl = (t) => ({ fontSize: 11, color: t.subtle });

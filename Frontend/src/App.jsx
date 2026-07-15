@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   LayoutDashboard, Users, ClipboardList, Search, Plus,
   ChevronLeft, Eye, KeyRound, X, Check, ShieldCheck, MapPin, Layers,
@@ -121,7 +121,7 @@ const CAT = {
 
 // ---------------------------------------------------------------------------
 export default function AdminConsole() {
-  const [screen, setScreen] = useState("dashboard"); // dashboard | users | detail | groups
+  const [screen, setScreen] = useState("dashboard"); // dashboard | users | detail | groups | create
   const [members, setMembers] = useState([]);       // loaded live from the API
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -130,7 +130,6 @@ export default function AdminConsole() {
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [filters, setFilters] = useState({ q: "", status: "all", role: "all", level: "all" });
   const [selected, setSelected] = useState(() => new Set());
-  const [showCreate, setShowCreate] = useState(false);
   const [otpModal, setOtpModal] = useState(null); // { member, code }
   const [toast, setToast] = useState(null);
 
@@ -179,6 +178,12 @@ export default function AdminConsole() {
     flash(`Changes saved for ${edited.member_name}`);
   }
   function openOtp(m) { setOtpModal({ member: m, code: generateOtp() }); }
+  function openDetail(id) { setActiveId(id); setScreen("detail"); }
+  function openExisting(member) {
+    setActiveId(member.activity_member_id);
+    setScreen("detail");
+    flash(`A login already exists for MID ${member.membership_id} — opening it`);
+  }
   function bulkSet(flag) {
     setMembers((ms) => ms.map((m) => selected.has(m.activity_member_id) ? { ...m, is_acitve: flag } : m));
     flash(`${selected.size} login${selected.size > 1 ? "s" : ""} ${flag === "Y" ? "activated" : "deactivated"}`);
@@ -214,7 +219,7 @@ export default function AdminConsole() {
       group_id: payload.group_id || null,
     };
     setMembers((ms) => [nm, ...ms]);
-    setShowCreate(false);
+    setScreen("users");
     flash(`Login created for ${payload.name}`);
     return nm;
   }
@@ -223,8 +228,8 @@ export default function AdminConsole() {
     { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
     { key: "groups", label: "Groups", icon: <FolderTree size={18} />, badge: groups.length },
   ];
-  const CRUMB = { dashboard: "Console", users: "Access management", detail: "Access management", groups: "Reference" };
-  const TITLE = { dashboard: "Dashboard", users: "Login accounts", detail: activeUser?.member_name || "Login", groups: "Group catalogue" };
+  const CRUMB = { dashboard: "Console", users: "Access management", detail: "Access management", groups: "Reference", create: "Access management" };
+  const TITLE = { dashboard: "Dashboard", users: "Login accounts", detail: activeUser?.member_name || "Login", groups: "Group catalogue", create: "New login" };
 
   if (loading || loadError) {
     return (
@@ -303,13 +308,13 @@ export default function AdminConsole() {
           {screen === "dashboard" && (
             <Overview
               stats={stats}
-              onCreate={() => setShowCreate(true)}
+              onCreate={() => setScreen("create")}
               onViewActive={() => { setFilters((f) => ({ ...f, status: "active" })); setScreen("users"); }}
             />
           )}
           {screen === "users" && (
             <UsersScreen rows={filtered} total={members.length} filters={filters} setFilters={setFilters}
-              selected={selected} setSelected={setSelected} bulkSet={bulkSet} onOpen={(id) => { setActiveId(id); setScreen("detail"); }}
+              selected={selected} setSelected={setSelected} bulkSet={bulkSet} onOpen={openDetail}
               onReset={openOtp} />
           )}
           {screen === "detail" && activeUser && (
@@ -320,10 +325,13 @@ export default function AdminConsole() {
             <GroupsScreen groups={groups} members={members} activeGroupId={activeGroupId}
               setActiveGroupId={setActiveGroupId} onSaveGroup={saveGroup} onDeleteGroup={deleteGroup} onSetMemberGroup={setMemberGroup} />
           )}
+          {screen === "create" && (
+            <CreateScreen groups={groups} members={members}
+              onBack={() => setScreen("users")} onCreate={createMember} onOtp={openOtp} onExisting={openExisting} />
+          )}
         </div>
       </main>
 
-      {showCreate && <CreateModal groups={groups} onClose={() => setShowCreate(false)} onCreate={createMember} onOtp={openOtp} />}
       {otpModal && <OtpModal data={otpModal} onRegenerate={() => setOtpModal({ ...otpModal, code: generateOtp() })} onClose={() => setOtpModal(null)} onSent={() => { flash(`OTP sent to ${otpModal.member.member_name}`); setOtpModal(null); }} />}
       {toast && (
         <div className="fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 animate-fade-in-up items-center gap-2 rounded-xl border border-gray-100 bg-white px-4 py-2.5 text-sm shadow-xl">
@@ -914,8 +922,11 @@ function OtpModal({ data, onRegenerate, onClose, onSent }) {
   );
 }
 
-// --- CREATE MODAL: MID-first stepped flow -----------------------------------
-function CreateModal({ groups, onClose, onCreate, onOtp }) {
+// --- CREATE SCREEN: MID-first stepped flow, full page ------------------------
+// If the entered membership ID already has a login, we don't let a duplicate
+// be created — we hand off to DetailScreen instead, which already has the
+// role, effective-access and activate/deactivate UI this needs.
+function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) {
   const [step, setStep] = useState(1);
   const [mid, setMid] = useState("");
   const [cadre, setCadre] = useState(null);
@@ -928,15 +939,24 @@ function CreateModal({ groups, onClose, onCreate, onOtp }) {
   const [groupId, setGroupId] = useState(null);
   const [comps, setComps] = useState([...STANDARD_BUNDLE]);
   const [err, setErr] = useState("");
+  const [looking, setLooking] = useState(false);
+  const lookedUpRef = useRef("");
 
   const locList = levelId === 5 ? CONSTITUENCIES : levelId === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
   const grp = groupId ? groups.find((g) => g.user_group_id === groupId) : null;
   const inheritedIds = new Set(grp ? grp.component_ids : []);
 
-  async function doLookup() {
+  async function doLookup(value) {
+    const q = (value ?? mid).trim();
     setErr("");
-    if (!mid.trim()) return setErr("Enter a membership ID first.");
-    const found = await lookupCadre(mid.trim());
+    if (!q) return setErr("Enter a membership ID first.");
+
+    const existing = members.find((m) => m.membership_id === q);
+    if (existing) { onExisting(existing); return; }
+
+    setLooking(true);
+    const found = await lookupCadre(q);
+    setLooking(false);
     if (found) {
       setCadre(found); setNotFound(false);
       setName(`${found.first_name || ""} ${found.last_name || ""}`.trim());
@@ -946,6 +966,15 @@ function CreateModal({ groups, onClose, onCreate, onOtp }) {
     }
     setStep(2);
   }
+
+  // Auto-lookup as soon as a full 8-digit membership ID has been typed.
+  useEffect(() => {
+    const q = mid.trim();
+    if (step === 1 && q.length === 8 && q !== lookedUpRef.current) {
+      lookedUpRef.current = q;
+      doLookup(q);
+    }
+  }, [mid, step]);
 
   function submit() {
     setErr("");
@@ -979,14 +1008,20 @@ function CreateModal({ groups, onClose, onCreate, onOtp }) {
   );
 
   return (
-    <div onClick={onClose} className="fixed inset-0 z-40 grid place-items-center bg-gray-900/50 p-5 backdrop-blur-sm">
-      <div onClick={(e) => e.stopPropagation()} className="max-h-[90vh] w-[min(580px,100%)] animate-fade-in-up overflow-auto rounded-2xl border border-gray-100 bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-          <h3 className="font-head text-[17px] font-semibold">New login</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-        </div>
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-purple-600">
+          <ChevronLeft size={16} /> Back to logins
+        </button>
+      </div>
 
-        <div className="flex flex-col gap-4 p-5">
+      <Card className="p-6">
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="font-head text-[17px] font-semibold">New login</h3>
+        </div>
+        <div className="mb-4 text-xs text-gray-500">Look up a membership ID to pull the member's details, role and current access.</div>
+
+        <div className="flex flex-col gap-4">
           <Stepper />
 
           {step === 1 && (
@@ -996,7 +1031,9 @@ function CreateModal({ groups, onClose, onCreate, onOtp }) {
                 <input autoFocus value={mid} onChange={(e) => setMid(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doLookup()} className={INPUT} placeholder="e.g. 20481, 20482, 30017…" />
               </label>
               <div className="text-xs leading-relaxed text-gray-500">
-                Enter a member's Membership ID to look them up. Try <strong>19457249</strong> for a match; an unknown ID lets you enter the details manually.
+                {looking
+                  ? "Looking up…"
+                  : <>Type a member's 8-digit Membership ID — lookup runs automatically. Try <strong>19457249</strong> for a match; an unknown ID lets you enter the details manually. If the ID already has a login, you'll be taken straight to it.</>}
               </div>
               {err && <ErrLine>{err}</ErrLine>}
             </>
@@ -1075,13 +1112,13 @@ function CreateModal({ groups, onClose, onCreate, onOtp }) {
           )}
         </div>
 
-        <div className="flex justify-between gap-2.5 border-t border-gray-100 px-5 py-3.5">
-          <button onClick={step === 1 ? onClose : () => setStep(step - 1)} className={SECONDARY}>{step === 1 ? "Cancel" : "Back"}</button>
-          {step === 1 && <button onClick={doLookup} className={PRIMARY}>Look up cadre</button>}
+        <div className="mt-5 flex justify-between gap-2.5 border-t border-gray-100 pt-4">
+          <button onClick={step === 1 ? onBack : () => setStep(step - 1)} className={SECONDARY}>{step === 1 ? "Cancel" : "Back"}</button>
+          {step === 1 && <button onClick={() => doLookup()} disabled={looking} className={PRIMARY}>{looking ? "Looking up…" : "Look up cadre"}</button>}
           {step === 2 && <button onClick={() => { if (!name.trim()) return setErr("Name is required."); setErr(""); setStep(3); }} className={PRIMARY}>Next: access</button>}
           {step === 3 && <button onClick={submit} className={PRIMARY}>Create &amp; generate OTP</button>}
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

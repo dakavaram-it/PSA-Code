@@ -221,7 +221,6 @@ export default function AdminConsole() {
 
   const NAV = [
     { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
-    { key: "users", label: "Logins", icon: <Users size={18} />, badge: stats.active },
     { key: "groups", label: "Groups", icon: <FolderTree size={18} />, badge: groups.length },
   ];
   const CRUMB = { dashboard: "Console", users: "Access management", detail: "Access management", groups: "Reference" };
@@ -301,7 +300,13 @@ export default function AdminConsole() {
         </header>
 
         <div key={screen + (activeId || "")} className="flex-1 animate-fade-in-up px-6 pb-16 pt-6">
-          {screen === "dashboard" && <Overview stats={stats} onCreate={() => setShowCreate(true)} />}
+          {screen === "dashboard" && (
+            <Overview
+              stats={stats}
+              onCreate={() => setShowCreate(true)}
+              onViewActive={() => { setFilters((f) => ({ ...f, status: "active" })); setScreen("users"); }}
+            />
+          )}
           {screen === "users" && (
             <UsersScreen rows={filtered} total={members.length} filters={filters} setFilters={setFilters}
               selected={selected} setSelected={setSelected} bulkSet={bulkSet} onOpen={(id) => { setActiveId(id); setScreen("detail"); }}
@@ -330,8 +335,8 @@ export default function AdminConsole() {
 }
 
 // --- shared bits -------------------------------------------------------------
-function Card({ children, className }) {
-  return <div className={cn(CARD, className)}>{children}</div>;
+function Card({ children, className, onClick }) {
+  return <div className={cn(CARD, className)} onClick={onClick}>{children}</div>;
 }
 function SectionTitle({ icon, children }) {
   return <div className={SECTION}><span className="flex">{icon}</span>{children}</div>;
@@ -384,10 +389,10 @@ function Ring({ pct, size = 88, stroke = 9 }) {
 }
 
 // --- OVERVIEW ---------------------------------------------------------------
-function Overview({ stats, onCreate }) {
+function Overview({ stats, onCreate, onViewActive }) {
   const kpis = [
     { label: "Total Users", value: stats.total, icon: <Users size={20} />, note: "All login accounts", cat: "blue" },
-    { label: "Active Users", value: stats.active, icon: <UserCheck size={20} />, note: "Can sign in", cat: "green" },
+    { label: "Active Users", value: stats.active, icon: <UserCheck size={20} />, note: "Can sign in", cat: "green", onClick: onViewActive },
     { label: "Inactive Users", value: stats.inactive, icon: <UserX size={20} />, note: "Deactivated", cat: "gray" },
   ];
   const roleRows = Object.entries(stats.roleCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
@@ -399,7 +404,7 @@ function Overview({ stats, onCreate }) {
         {kpis.map((k) => {
           const cat = CAT[k.cat];
           return (
-            <Card key={k.label} className={cn(CARD_HOVER, "p-5")}>
+            <Card key={k.label} className={cn(CARD_HOVER, "p-5", k.onClick && "cursor-pointer")} onClick={k.onClick}>
               <div className="mb-4 flex items-center justify-between">
                 <span className="text-[10.5px] font-medium uppercase tracking-wide text-gray-400">{k.label}</span>
                 <span className={cn("grid h-10 w-10 place-items-center rounded-xl shadow-sm", cat.tile, cat.icon)}>{k.icon}</span>

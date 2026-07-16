@@ -1,6 +1,13 @@
-# Backend/main.py — READ-ONLY live data layer for the UA admin console.
+# Backend/main.py — mostly-read-only data layer for the UA admin console.
 # Python + FastAPI + PyMySQL. Powers the frontend with real dakavara_pa data.
-# No INSERT/UPDATE/DELETE. See Backend.md for the contract and query rationale.
+# Almost everything here is SELECT-only. Two narrow exceptions write to the
+# live DB: PUT /api/members/{id}/role and PUT /api/members/{id}/active,
+# added to back the "New login" existing-login panel's role-change and
+# activate/deactivate controls. Every other endpoint remains GET-only.
+# There is still no authentication in front of this API — anyone who can
+# reach it can call the two write endpoints below. Put this behind auth
+# before it's exposed outside a trusted network.
+# See Backend.md for the contract and query rationale.
 #
 # Run:  pip install -r requirements.txt
 #       python main.py            (or: uvicorn main:app --port 4000)
@@ -10,6 +17,7 @@ import pymysql
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 load_dotenv(dotenv_path="../.env")  # repo-root .env (git-ignored)
 
@@ -46,6 +54,26 @@ def run(sql, args=None, one=False):
     return (rows[0] if rows else None) if one else rows
 
 
+def connect_write():
+    """Read-write connection — used ONLY by the two mutation endpoints below.
+    Every other endpoint in this file uses connect(), which is forced
+    read-only at the session level; this one deliberately is not."""
+    conn = pymysql.connect(**DB)
+    with conn.cursor() as cur:
+        cur.execute("SET SESSION group_concat_max_len = 8192")
+    return conn
+
+
+def run_write(sql, args=None):
+    conn = connect_write()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, args)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # component_ids comes back as a comma string; the UI wants an int array.
 def shape(r):
     ids = r.get("component_ids")
@@ -53,10 +81,15 @@ def shape(r):
     return r
 
 
+# S3 bucket cadre photos are stored under — tdp_cadre.image holds just the
+# relative key (e.g. "152/AP1406574091.jpg"), NULL for the ~99 cadre with no photo on file.
+CADRE_IMAGE_BASE = "https://imagesearch-projectkv.s3.amazonaws.com/cadre_images/"
+
 # One row per login. Collapses the member×role×component fan-out in SQL. [Backend.md §5.1]
-MEMBER_SELECT = """
+MEMBER_SELECT = f"""
   SELECT AM.activity_member_id, AM.member_name, AM.tdp_cadre_id, AM.inserted_time,
          AM.updated_by, AM.is_acitve, TC.membership_id, TC.mobile_no,
+         CONCAT("{CADRE_IMAGE_BASE}", TC.image) AS image_url,
          MAX(AMAT.user_type_id) AS role_id, MAX(UT.type) AS role_name, MAX(UT.short_name) AS role_short,
          MAX(AMAL.activity_member_level_id) AS level_id, MAX(UL.level) AS level_name,
          MAX(AMAL.activity_location_value) AS location_value,
@@ -70,18 +103,76 @@ MEMBER_SELECT = """
   LEFT JOIN activity_member_component AMC ON AMC.activity_member_id = AM.activity_member_id AND AMC.is_valid='Y'
 """
 GROUP_BY = """ GROUP BY AM.activity_member_id, AM.member_name, AM.tdp_cadre_id,
-  AM.inserted_time, AM.updated_by, AM.is_acitve, TC.membership_id, TC.mobile_no"""
+  AM.inserted_time, AM.updated_by, AM.is_acitve, TC.membership_id, TC.mobile_no, TC.image"""
 
-app = FastAPI(title="UA read-only API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_headers=["*"])
+app = FastAPI(title="UA admin API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "PUT"], allow_headers=["*"])
+
+
+class RoleUpdate(BaseModel):
+    user_type_id: int
+
+
+class ActiveUpdate(BaseModel):
+    is_active: str  # 'Y' or 'N'
 
 
 # 1) member list  (?status=all|active|inactive, default active)
+# Built on top of the member x cadre x component join originally supplied for
+# this endpoint, extended with AM.is_acitve (so active/inactive can be told
+# apart at all) and a role join (activity_member_access_type -> user_type, for
+# "logins by role"). The component and role joins are LEFT JOINs rather than
+# the original's inner joins — with inner joins, any login with zero granted
+# components, or no active role, would vanish from the Active/Inactive counts
+# entirely instead of just showing an empty role/component list, which would
+# quietly undercount both KPIs. Same reasoning for TC: LEFT JOIN so a login
+# whose tdp_cadre_id doesn't resolve still counts instead of disappearing.
+# Query returns one row per login x component (or one row per login if it has
+# no components); ROLLUP_MEMBERS below collapses that back into one object per
+# login with a component_ids array, matching what the frontend expects.
+MEMBERS_QUERY = f"""
+  SELECT
+    AM.activity_member_id, TC.tdp_cadre_id, CONCAT("#", TC.membership_id) AS membership_id,
+    AM.member_name, TC.mobile_no, AM.is_acitve, AM.inserted_time, AM.updated_by,
+    CONCAT("{CADRE_IMAGE_BASE}", TC.image) AS image_url,
+    UT.user_type_id AS role_id, UT.type AS role_name,
+    AMC.component_id, C.actual_name
+  FROM activity_member AM
+  LEFT JOIN tdp_cadre TC ON AM.tdp_cadre_id = TC.tdp_cadre_id
+  LEFT JOIN activity_member_access_type AMAT ON AMAT.activity_member_id = AM.activity_member_id AND AMAT.is_active = 'Y'
+  LEFT JOIN user_type UT ON UT.user_type_id = AMAT.user_type_id
+  LEFT JOIN activity_member_component AMC ON AMC.activity_member_id = AM.activity_member_id AND AMC.is_valid = 'Y'
+  LEFT JOIN component C ON C.component_id = AMC.component_id
+  ORDER BY AM.activity_member_id, C.component_id
+"""
+
+
+def rollup_members(rows):
+    """Collapse the login x component fan-out into one dict per login."""
+    by_id = {}
+    for r in rows:
+        mid = r["activity_member_id"]
+        m = by_id.get(mid)
+        if m is None:
+            m = {k: r[k] for k in (
+                "activity_member_id", "tdp_cadre_id", "membership_id", "member_name",
+                "mobile_no", "is_acitve", "inserted_time", "updated_by", "image_url", "role_id", "role_name",
+            )}
+            m["component_ids"] = []
+            by_id[mid] = m
+        if r["component_id"] is not None:
+            m["component_ids"].append(r["component_id"])
+    return list(by_id.values())
+
+
 @app.get("/api/members")
 def members(status: str = "active"):
-    where = "" if status == "all" else f" WHERE AM.is_acitve = '{'N' if status == 'inactive' else 'Y'}'"
-    rows = run(MEMBER_SELECT + where + GROUP_BY + " ORDER BY AM.inserted_time DESC")
-    return [shape(r) for r in rows]
+    result = rollup_members(run(MEMBERS_QUERY))
+    if status == "active":
+        result = [m for m in result if m["is_acitve"] == "Y"]
+    elif status == "inactive":
+        result = [m for m in result if m["is_acitve"] == "N"]
+    return result
 
 
 # 2) single member (any status, so a deactivated login can still be opened)
@@ -125,6 +216,61 @@ def cadre(mid: str):
     if not row:
         raise HTTPException(status_code=404, detail="no cadre for that MID")
     return row
+
+
+# 5) change a login's role (New login → existing-login panel).
+# Deactivates any currently-active role grant(s), then reactivates a matching
+# prior grant or inserts a fresh one — mirrors the reference doc's step 6.
+@app.put("/api/members/{member_id}/role")
+def update_role(member_id: int, body: RoleUpdate):
+    if not run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True):
+        raise HTTPException(status_code=404, detail="not found")
+
+    run_write(
+        "UPDATE activity_member_access_type SET is_active='N' "
+        "WHERE activity_member_id=%s AND is_active='Y'",
+        (member_id,),
+    )
+    existing = run(
+        "SELECT activity_member_access_type_id FROM activity_member_access_type "
+        "WHERE activity_member_id=%s AND user_type_id=%s LIMIT 1",
+        (member_id, body.user_type_id), one=True,
+    )
+    if existing:
+        run_write(
+            "UPDATE activity_member_access_type SET is_active='Y' WHERE activity_member_access_type_id=%s",
+            (existing["activity_member_access_type_id"],),
+        )
+    else:
+        run_write(
+            "INSERT INTO activity_member_access_type (activity_member_id, user_type_id, is_active) "
+            "VALUES (%s, %s, 'Y')",
+            (member_id, body.user_type_id),
+        )
+    row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
+    return shape(row)
+
+
+# 6) activate / deactivate a login (New login → existing-login panel).
+# Deactivating also kills any live OTPs, mirroring Backend.md's reference flow.
+@app.put("/api/members/{member_id}/active")
+def update_active(member_id: int, body: ActiveUpdate):
+    if body.is_active not in ("Y", "N"):
+        raise HTTPException(status_code=400, detail="is_active must be 'Y' or 'N'")
+
+    member_row = run("SELECT tdp_cadre_id FROM activity_member WHERE activity_member_id=%s", (member_id,), one=True)
+    if not member_row:
+        raise HTTPException(status_code=404, detail="not found")
+
+    run_write("UPDATE activity_member SET is_acitve=%s WHERE activity_member_id=%s", (body.is_active, member_id))
+    if body.is_active == "N" and member_row["tdp_cadre_id"]:
+        run_write(
+            "UPDATE login_otp_details SET is_valid='N', updated_time=NOW() "
+            "WHERE tdp_cadre_id=%s AND is_valid='Y'",
+            (member_row["tdp_cadre_id"],),
+        )
+    row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
+    return shape(row)
 
 
 if __name__ == "__main__":

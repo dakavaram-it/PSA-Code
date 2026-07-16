@@ -3,8 +3,9 @@ import {
   LayoutDashboard, Users, ClipboardList, Search, Plus,
   ChevronLeft, Eye, KeyRound, X, Check, ShieldCheck, MapPin, Layers,
   AlertTriangle, UserCheck, UserX, FolderTree, Save, RotateCcw, Copy, UserPlus,
+  IdCard, Smartphone,
 } from "lucide-react";
-import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre } from "./data/api.js";
+import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre, updateMemberRole, updateMemberActive } from "./data/api.js";
 import { cn } from "./lib/utils.js";
 
 /*
@@ -24,8 +25,9 @@ import { cn } from "./lib/utils.js";
   What remains is driven entirely by activity_member -> tdp_cadre. [§0.2, §5.1]
 
   UI language: reskinned to the "Smart AI Interview / Jobseeker" design system —
-  purple/indigo gradient theme, rounded-2xl soft-shadow cards with hover-lift,
-  category-colour icon tiles, pill CTAs, fade-in-up entrances. Built with Tailwind.
+  warm white background with a light yellow/amber/orange accent theme, rounded-2xl
+  soft-shadow cards with hover-lift, category-colour icon tiles, pill CTAs,
+  fade-in-up entrances. Built with Tailwind.
 */
 
 // ---------------------------------------------------------------------------
@@ -103,17 +105,17 @@ const NO_NAME = "— unnamed —";
 // ---------------------------------------------------------------------------
 const CARD = "rounded-2xl border border-gray-100 bg-white shadow-lg";
 const CARD_HOVER = "transition-all duration-300 hover:-translate-y-1 hover:shadow-xl";
-const INPUT = "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-200 focus:border-purple-400 transition";
-const PRIMARY = "inline-flex items-center justify-center gap-2 rounded-xl bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow transition-all hover:bg-purple-700 hover:shadow-lg disabled:pointer-events-none disabled:opacity-50";
+const INPUT = "w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400 transition";
+const PRIMARY = "inline-flex items-center justify-center gap-2 rounded-xl bg-yellow-400 px-4 py-2.5 text-sm font-semibold text-yellow-950 shadow transition-all hover:bg-yellow-500 hover:shadow-lg disabled:pointer-events-none disabled:opacity-50";
 const SECONDARY = "inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-50 disabled:opacity-50";
 const LABEL = "text-xs font-medium text-gray-500";
-const SECTION = "flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-purple-600";
+const SECTION = "flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-yellow-700";
 
 // Category colour scheme, mirroring the reference feature cards (-50 tile + -500 icon).
 const CAT = {
   blue:   { tile: "bg-blue-50",     icon: "text-blue-500",   bar: "bg-blue-500" },
-  purple: { tile: "bg-purple-50", icon: "text-purple-500", bar: "bg-purple-500" },
-  indigo: { tile: "bg-indigo-50", icon: "text-indigo-500", bar: "bg-indigo-500" },
+  yellow: { tile: "bg-yellow-50", icon: "text-yellow-700", bar: "bg-yellow-500" },
+  orange: { tile: "bg-orange-50", icon: "text-orange-500", bar: "bg-orange-500" },
   green:  { tile: "bg-green-50",    icon: "text-green-500",  bar: "bg-green-500" },
   amber:  { tile: "bg-amber-50",   icon: "text-amber-500",  bar: "bg-amber-500" },
   gray:   { tile: "bg-gray-100",       icon: "text-gray-400",   bar: "bg-gray-400" },
@@ -179,10 +181,26 @@ export default function AdminConsole() {
   }
   function openOtp(m) { setOtpModal({ member: m, code: generateOtp() }); }
   function openDetail(id) { setActiveId(id); setScreen("detail"); }
-  function openExisting(member) {
-    setActiveId(member.activity_member_id);
-    setScreen("detail");
-    flash(`A login already exists for MID ${member.membership_id} — opening it`);
+  // The only two writes in this app that hit the real DB (Backend/main.py's
+  // two PUT endpoints) — everything else here is client-side mock state.
+  async function changeMemberRole(id, role) {
+    const updated = await updateMemberRole(id, role.id);
+    setMembers((ms) => ms.map((m) => m.activity_member_id === id ? updated : m));
+    flash(`Role updated to ${role.type} for ${updated.member_name}`);
+    return updated;
+  }
+  async function toggleMemberActive(id, nextActive) {
+    const updated = await updateMemberActive(id, nextActive);
+    setMembers((ms) => ms.map((m) => m.activity_member_id === id ? updated : m));
+    flash(`${updated.member_name} ${nextActive === "Y" ? "activated" : "deactivated"}`);
+    return updated;
+  }
+  // Location has no backend write endpoint yet — mock only, like the rest of the app.
+  function changeMemberLocation(id, patch) {
+    const updated = { ...members.find((m) => m.activity_member_id === id), ...patch };
+    setMembers((ms) => ms.map((m) => m.activity_member_id === id ? updated : m));
+    flash(`Location updated for ${updated.member_name} (not saved to the server)`);
+    return updated;
   }
   function bulkSet(flag) {
     setMembers((ms) => ms.map((m) => selected.has(m.activity_member_id) ? { ...m, is_acitve: flag } : m));
@@ -233,9 +251,9 @@ export default function AdminConsole() {
 
   if (loading || loadError) {
     return (
-      <div className="grid min-h-screen place-items-center bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-100 p-6 text-center">
+      <div className="grid min-h-screen place-items-center bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-100 p-6 text-center">
         <div className="flex flex-col items-center gap-4">
-          {!loadError && <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-purple-200 border-t-purple-600" />}
+          {!loadError && <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-yellow-200 border-t-yellow-600" />}
           <span className={cn("text-sm", loadError ? "text-red-500" : "text-gray-500")}>
             {loadError || "Loading live data…"}
           </span>
@@ -245,14 +263,14 @@ export default function AdminConsole() {
   }
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-indigo-100 font-sans text-gray-900">
+    <div className="flex min-h-screen bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-100 font-sans text-gray-900">
       {/* SIDEBAR */}
       <aside className="sticky top-0 flex h-screen w-60 flex-none flex-col border-r border-white/60 bg-white/70 py-5 backdrop-blur-xl">
         <div className="flex items-center gap-3 px-5 pb-5">
-          <div className="grid h-10 w-10 flex-none place-items-center rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 font-head text-lg font-bold text-white shadow-md">U</div>
+          <div className="grid h-10 w-10 flex-none place-items-center rounded-xl bg-gradient-to-br from-amber-600 to-orange-700 font-head text-lg font-bold text-white shadow-md">U</div>
           <div className="leading-tight">
             <div className="font-head text-[15px] font-bold tracking-tight">User</div>
-            <div className="text-[9.5px] uppercase tracking-[0.16em] text-purple-500">Admin Console</div>
+            <div className="text-[9.5px] uppercase tracking-[0.16em] text-yellow-700">Admin Console</div>
           </div>
         </div>
         <div className="px-5 py-1.5 text-[9.5px] uppercase tracking-[0.14em] text-gray-400">Manage</div>
@@ -264,13 +282,13 @@ export default function AdminConsole() {
                 className={cn(
                   "flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all",
                   on
-                    ? "bg-purple-100 font-semibold text-purple-700 shadow-sm"
-                    : "font-medium text-gray-600 hover:bg-purple-50",
+                    ? "bg-yellow-100 font-semibold text-yellow-700 shadow-sm"
+                    : "font-medium text-gray-600 hover:bg-yellow-50",
                 )}>
                 <span className="flex w-[18px] flex-none">{it.icon}</span>
                 <span className="flex-1">{it.label}</span>
                 {it.badge != null && (
-                  <span className="rounded-full bg-purple-200/70 px-2 py-0.5 text-[10px] font-semibold text-purple-700">{it.badge}</span>
+                  <span className="rounded-full bg-yellow-200/70 px-2 py-0.5 text-[10px] font-semibold text-yellow-700">{it.badge}</span>
                 )}
               </button>
             );
@@ -278,7 +296,7 @@ export default function AdminConsole() {
         </nav>
         <div className="mt-auto px-4">
           <div className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white/70 p-3 shadow-sm">
-            <div className="grid h-9 w-9 flex-none place-items-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 font-head text-sm font-bold text-white">A</div>
+            <div className="grid h-9 w-9 flex-none place-items-center rounded-full bg-gradient-to-br from-amber-600 to-orange-700 font-head text-sm font-bold text-white">A</div>
             <div className="leading-tight">
               <div className="text-sm font-semibold">ADMIN</div>
               <div className="text-[11px] text-gray-400">Administrator</div>
@@ -292,7 +310,7 @@ export default function AdminConsole() {
         {/* TOPBAR */}
         <header className="sticky top-0 z-10 flex items-center gap-4 border-b border-white/60 bg-white/50 px-6 py-4 backdrop-blur-xl">
           <div className="min-w-0 flex-1">
-            <div className="text-[10.5px] uppercase tracking-[0.12em] text-purple-500">{CRUMB[screen]}</div>
+            <div className="text-[10.5px] uppercase tracking-[0.12em] text-yellow-700">{CRUMB[screen]}</div>
             <h1 className="font-head text-[22px] font-semibold leading-tight">{TITLE[screen]}</h1>
           </div>
           <div className="flex items-center gap-3">
@@ -300,7 +318,7 @@ export default function AdminConsole() {
               <div className="text-sm font-semibold">ADMIN</div>
               <div className="text-[11px] text-gray-400">Administrator</div>
             </div>
-            <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 font-head font-bold text-white shadow">A</div>
+            <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-amber-600 to-orange-700 font-head font-bold text-white shadow">A</div>
           </div>
         </header>
 
@@ -308,14 +326,17 @@ export default function AdminConsole() {
           {screen === "dashboard" && (
             <Overview
               stats={stats}
+              members={members}
               onCreate={() => setScreen("create")}
               onViewActive={() => { setFilters((f) => ({ ...f, status: "active" })); setScreen("users"); }}
+              onViewInactive={() => { setFilters((f) => ({ ...f, status: "inactive" })); setScreen("users"); }}
+              onOpenMember={openDetail}
             />
           )}
           {screen === "users" && (
             <UsersScreen rows={filtered} total={members.length} filters={filters} setFilters={setFilters}
               selected={selected} setSelected={setSelected} bulkSet={bulkSet} onOpen={openDetail}
-              onReset={openOtp} />
+              onReset={openOtp} onBack={() => setScreen("dashboard")} />
           )}
           {screen === "detail" && activeUser && (
             <DetailScreen key={activeUser.activity_member_id} u={activeUser} groups={groups}
@@ -327,7 +348,8 @@ export default function AdminConsole() {
           )}
           {screen === "create" && (
             <CreateScreen groups={groups} members={members}
-              onBack={() => setScreen("users")} onCreate={createMember} onOtp={openOtp} onExisting={openExisting} />
+              onBack={() => setScreen("dashboard")} onCreate={createMember} onOtp={openOtp}
+              onChangeRole={changeMemberRole} onToggleActive={toggleMemberActive} onChangeLocation={changeMemberLocation} />
           )}
         </div>
       </main>
@@ -346,6 +368,20 @@ export default function AdminConsole() {
 function Card({ children, className, onClick }) {
   return <div className={cn(CARD, className)} onClick={onClick}>{children}</div>;
 }
+// Cadre photo when we have one and it loads; falls back to initials otherwise
+// (no photo on file, or the S3 URL 404s/errors). `className` carries sizing +
+// rounding + the fallback background/gradient; `textClassName` styles the initials.
+function Avatar({ name, imageUrl, className, textClassName }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className={cn("relative grid flex-none place-items-center overflow-hidden", className)}>
+      <span className={textClassName}>{initials(name)}</span>
+      {imageUrl && !failed && (
+        <img src={imageUrl} alt="" onError={() => setFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
+      )}
+    </div>
+  );
+}
 function SectionTitle({ icon, children }) {
   return <div className={SECTION}><span className="flex">{icon}</span>{children}</div>;
 }
@@ -362,7 +398,7 @@ function StatusPill({ active }) {
   );
 }
 function RoleBadge({ label }) {
-  return <span className="rounded-full bg-purple-100 px-2.5 py-0.5 text-[10.5px] font-semibold text-purple-700">{label}</span>;
+  return <span className="rounded-full bg-yellow-100 px-2.5 py-0.5 text-[10.5px] font-semibold text-yellow-700">{label}</span>;
 }
 function KV({ k, v, mono }) {
   return (
@@ -372,14 +408,22 @@ function KV({ k, v, mono }) {
     </div>
   );
 }
+// Inline "Label: value" pair, for details laid out horizontally rather than as a KV grid.
+function HKV({ k, v }) {
+  return <span className="text-gray-500">{k}: <span className="font-medium text-gray-800">{v}</span></span>;
+}
 function Field({ label, children }) {
   return <label className="flex min-w-[130px] flex-col gap-1.5"><span className={LABEL}>{label}</span>{children}</label>;
+}
+// Inline "Label: <control>" pair — a select/input sitting next to its label on one line.
+function FieldInline({ label, children }) {
+  return <label className="flex items-center gap-1.5 text-sm"><span className={LABEL}>{label}:</span>{children}</label>;
 }
 function ErrLine({ children }) {
   return <div className="flex items-center gap-2 text-sm text-red-600"><AlertTriangle size={14} /> {children}</div>;
 }
 
-// SVG progress ring — the reference's CircularProgressBar, in purple.
+// SVG progress ring — the reference's CircularProgressBar, in yellow.
 function Ring({ pct, size = 88, stroke = 9 }) {
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
@@ -387,24 +431,26 @@ function Ring({ pct, size = 88, stroke = 9 }) {
   return (
     <div className="relative flex-none" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} className="fill-none stroke-purple-100" />
+        <circle cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} className="fill-none stroke-yellow-100" />
         <circle cx={size / 2} cy={size / 2} r={r} strokeWidth={stroke} strokeLinecap="round"
-          strokeDasharray={c} strokeDashoffset={off} className="fill-none stroke-purple-600 transition-all duration-700" />
+          strokeDasharray={c} strokeDashoffset={off} className="fill-none stroke-yellow-600 transition-all duration-700" />
       </svg>
-      <div className="absolute inset-0 grid place-items-center font-head font-bold text-purple-700" style={{ fontSize: size * 0.24 }}>{pct}%</div>
+      <div className="absolute inset-0 grid place-items-center font-head font-bold text-yellow-700" style={{ fontSize: size * 0.24 }}>{pct}%</div>
     </div>
   );
 }
 
 // --- OVERVIEW ---------------------------------------------------------------
-function Overview({ stats, onCreate, onViewActive }) {
+function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOpenMember }) {
+  const [expandedRole, setExpandedRole] = useState(null);
   const kpis = [
     { label: "Total Users", value: stats.total, icon: <Users size={20} />, note: "All login accounts", cat: "blue" },
     { label: "Active Users", value: stats.active, icon: <UserCheck size={20} />, note: "Can sign in", cat: "green", onClick: onViewActive },
-    { label: "Inactive Users", value: stats.inactive, icon: <UserX size={20} />, note: "Deactivated", cat: "gray" },
+    { label: "Inactive Users", value: stats.inactive, icon: <UserX size={20} />, note: "Deactivated", cat: "gray", onClick: onViewInactive },
   ];
   const roleRows = Object.entries(stats.roleCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const maxComp = Math.max(1, ...stats.topComponents.map((c) => c.count));
+  const roleMembers = expandedRole ? members.filter((m) => m.is_acitve === "Y" && m.role_name === expandedRole) : [];
 
   return (
     <div className="flex flex-col gap-5">
@@ -422,7 +468,7 @@ function Overview({ stats, onCreate, onViewActive }) {
             </Card>
           );
         })}
-        <button onClick={onCreate} className={cn(CARD_HOVER, "flex flex-col items-start justify-between rounded-2xl border border-purple-300/60 bg-gradient-to-br from-purple-600 to-indigo-600 p-5 text-left text-white shadow-lg")}>
+        <button onClick={onCreate} className={cn(CARD_HOVER, "flex flex-col items-start justify-between rounded-2xl border border-yellow-300/60 bg-gradient-to-br from-amber-600 to-orange-700 p-5 text-left text-white shadow-lg")}>
           <div className="mb-4 flex w-full items-center justify-between">
             <span className="text-[10.5px] font-medium uppercase tracking-wide text-white/70">Quick action</span>
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-white/20"><UserPlus size={20} /></span>
@@ -433,7 +479,7 @@ function Overview({ stats, onCreate, onViewActive }) {
       </div>
 
       {/* Standard bundle callout — the report's headline finding. [§4.2] */}
-      <Card className="flex flex-wrap items-center gap-5 p-6">
+      {/*<Card className="flex flex-wrap items-center gap-5 p-6">
         <Ring pct={stats.onStandardPct} />
         <div className="min-w-[220px] flex-1">
           <div className="font-head text-base font-semibold">{stats.onStandard} active logins share one component bundle</div>
@@ -441,7 +487,7 @@ function Overview({ stats, onCreate, onViewActive }) {
             Membership Dashboard, Cubs-Committees, Committee Meetings, SIR Dashboard. Role and component set are largely decoupled — the "New login" flow offers this as a one-click preset.
           </div>
         </div>
-      </Card>
+      </Card>*/}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <Card className="p-6">
@@ -449,14 +495,19 @@ function Overview({ stats, onCreate, onViewActive }) {
           <div className="mt-4 flex flex-col gap-3.5">
             {roleRows.map(([role, n]) => {
               const share = stats.active ? (n / stats.active) * 100 : 0;
+              const open = expandedRole === role;
               return (
                 <div key={role} className="flex items-center gap-3">
                   <span className="w-28 flex-none truncate text-[13px] font-medium">{role}</span>
                   <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100">
-                    <div className="h-full rounded-full bg-gradient-to-r from-purple-500 to-indigo-500 transition-all duration-500" style={{ width: `${share}%` }} />
+                    <div className="h-full rounded-full bg-gradient-to-r from-yellow-500 to-orange-500 transition-all duration-500" style={{ width: `${share}%` }} />
                   </div>
                   <span className="w-12 flex-none text-right font-mono text-[13px] font-semibold tabular-nums">{n}</span>
-                  <span className="w-14 flex-none text-right font-mono text-[11px] tabular-nums text-purple-500">{share.toFixed(1)}%</span>
+                  <span className="w-14 flex-none text-right font-mono text-[11px] tabular-nums text-yellow-700">{share.toFixed(1)}%</span>
+                  <button onClick={() => setExpandedRole(open ? null : role)} title={`View ${role} logins`}
+                    className={cn("flex-none rounded-lg p-1.5 transition-colors", open ? "bg-yellow-100 text-yellow-600" : "text-gray-400 hover:bg-yellow-50 hover:text-yellow-600")}>
+                    <Eye size={14} />
+                  </button>
                 </div>
               );
             })}
@@ -473,7 +524,7 @@ function Overview({ stats, onCreate, onViewActive }) {
                   <span className="flex-none text-gray-400">{c.count}</span>
                 </div>
                 <div className="h-1.5 rounded-full bg-gray-100">
-                  <div className="h-full rounded-full bg-indigo-500 transition-all duration-500" style={{ width: `${(c.count / maxComp) * 100}%` }} />
+                  <div className="h-full rounded-full bg-orange-500 transition-all duration-500" style={{ width: `${(c.count / maxComp) * 100}%` }} />
                 </div>
               </div>
             ))}
@@ -481,8 +532,52 @@ function Overview({ stats, onCreate, onViewActive }) {
         </Card>
       </div>
 
+      {expandedRole && (
+        <Card className="overflow-hidden">
+          <div className="flex items-center justify-between p-6 pb-0">
+            <SectionTitle icon={<Eye size={14} />}>{expandedRole} — logins ({roleMembers.length})</SectionTitle>
+            <button onClick={() => setExpandedRole(null)} className="text-gray-400 hover:text-gray-600"><X size={16} /></button>
+          </div>
+          <div className="mt-3.5 max-h-[420px] overflow-auto">
+            <table className="w-full border-collapse text-sm">
+              <thead className="sticky top-0">
+                <tr className="bg-gray-50/80 text-[11px] uppercase tracking-wide text-gray-400">
+                  {["Membership ID", "Name", "Mobile", "Role", "Scope", "Status", "Created", ""].map((h, i) => (
+                    <th key={i} className={cn("whitespace-nowrap bg-gray-50/80 font-medium", i === 7 ? "px-4 py-2.5 text-right" : "px-2 py-2.5 text-left", i === 0 && "pl-6")}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {roleMembers.map((m) => (
+                  <tr key={m.activity_member_id} className="border-t border-gray-100 transition-colors hover:bg-yellow-50/50">
+                    <td onClick={() => onOpenMember(m.activity_member_id)} className="cursor-pointer py-2.5 pl-6 font-head font-semibold hover:text-yellow-600">
+                      {m.membership_id || <span className="text-[11px] text-amber-600">— none —</span>}
+                    </td>
+                    <td onClick={() => onOpenMember(m.activity_member_id)} className="cursor-pointer px-2 py-2.5">
+                      <div className="flex items-center gap-2.5">
+                        <Avatar name={m.member_name} imageUrl={m.image_url} className="h-7 w-7 rounded-full bg-yellow-100" textClassName="font-head text-[10px] font-semibold text-yellow-600" />
+                        <span className={m.member_name ? "" : "text-gray-400"}>{m.member_name || NO_NAME}</span>
+                      </div>
+                    </td>
+                    <td className={cn("px-2 py-2.5", m.mobile_no ? "" : "text-amber-600")}>{m.mobile_no || "missing"}</td>
+                    <td className="px-2 py-2.5">{m.role_name ? <RoleBadge label={m.role_name} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
+                    <td className="px-2 py-2.5 text-xs text-gray-500">{m.level_name ? `${m.level_name} · ${m.location_value}` : "—"}</td>
+                    <td className="px-2 py-2.5"><StatusPill active={m.is_acitve === "Y"} /></td>
+                    <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{fmtDate(m.inserted_time)}</td>
+                    <td className="whitespace-nowrap px-4 py-2 text-right">
+                      <button title="View" onClick={() => onOpenMember(m.activity_member_id)} className="inline-grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-yellow-100 hover:text-yellow-600"><Eye size={15} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {roleMembers.length === 0 && <div className="p-9 text-center text-sm text-gray-400">No logins for this role.</div>}
+          </div>
+        </Card>
+      )}
+
       {/* Geographic scope — only 3 of 9 levels used. [§3.3] */}
-      <Card className="p-6">
+      {/*<Card className="p-6">
         <SectionTitle icon={<MapPin size={14} />}>Geographic scope in use</SectionTitle>
         <div className="mt-4 flex flex-wrap gap-4">
           {USED_LEVEL_IDS.map((lid) => {
@@ -499,13 +594,13 @@ function Overview({ stats, onCreate, onViewActive }) {
             The other 6 levels (District, Mandal, Village…) have no members.
           </div>
         </div>
-      </Card>
+      </Card>*/}
     </div>
   );
 }
 
 // --- USERS ------------------------------------------------------------------
-function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, bulkSet, onOpen, onReset }) {
+function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, bulkSet, onOpen, onReset, onBack }) {
   const allSel = rows.length > 0 && rows.every((r) => selected.has(r.activity_member_id));
   const toggleAll = () => {
     const next = new Set(selected);
@@ -517,11 +612,15 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
 
   return (
     <div className="flex flex-col gap-4">
+      <button onClick={onBack} className="flex items-center gap-1.5 self-start text-sm text-gray-500 transition-colors hover:text-yellow-600">
+        <ChevronLeft size={16} /> Back to dashboard
+      </button>
+
       <Card className="flex flex-wrap items-end gap-3 p-4">
         <label className="flex min-w-[180px] flex-1 flex-col gap-1.5">
           <span className={LABEL}>Search membership ID, name or mobile</span>
           <div className="group relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-purple-500" />
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-yellow-700" />
             <input value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} placeholder="e.g. 20481 or Priya"
               className={cn(INPUT, "pl-9")} />
           </div>
@@ -547,8 +646,8 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
       </Card>
 
       {selected.size > 0 && (
-        <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-purple-100 bg-purple-50 px-4 py-2.5">
-          <strong className="text-sm text-purple-700">{selected.size} selected</strong>
+        <div className="flex flex-wrap items-center gap-2.5 rounded-xl border border-yellow-100 bg-yellow-50 px-4 py-2.5">
+          <strong className="text-sm text-yellow-700">{selected.size} selected</strong>
           <button onClick={() => bulkSet("Y")} className={SECONDARY}>Activate</button>
           <button onClick={() => bulkSet("N")} className={SECONDARY}>Deactivate</button>
           <button onClick={() => setSelected(new Set())} className="text-sm font-medium text-gray-500 hover:text-gray-700">Clear</button>
@@ -561,7 +660,7 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
             <thead>
               <tr className="bg-gray-50/80 text-[11px] uppercase tracking-wide text-gray-400">
                 <th className="w-9 py-2.5 pl-4 text-left">
-                  <input type="checkbox" checked={allSel} onChange={toggleAll} className="h-4 w-4 accent-purple-600" />
+                  <input type="checkbox" checked={allSel} onChange={toggleAll} className="h-4 w-4 accent-yellow-600" />
                 </th>
                 {["Membership ID", "Name", "Mobile", "Role", "Scope", "Status", "Created", ""].map((h, i) => (
                   <th key={i} className={cn("whitespace-nowrap font-medium", i === 7 ? "px-4 py-2.5 text-right" : "px-2 py-2.5 text-left")}>{h}</th>
@@ -570,14 +669,14 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
             </thead>
             <tbody>
               {rows.map((u) => (
-                <tr key={u.activity_member_id} className="border-t border-gray-100 transition-colors hover:bg-purple-50/50">
-                  <td className="pl-4"><input type="checkbox" checked={selected.has(u.activity_member_id)} onChange={() => toggleOne(u.activity_member_id)} className="h-4 w-4 accent-purple-600" /></td>
-                  <td onClick={() => onOpen(u.activity_member_id)} className="cursor-pointer px-2 py-2.5 font-head font-semibold hover:text-purple-600">
+                <tr key={u.activity_member_id} className="border-t border-gray-100 transition-colors hover:bg-yellow-50/50">
+                  <td className="pl-4"><input type="checkbox" checked={selected.has(u.activity_member_id)} onChange={() => toggleOne(u.activity_member_id)} className="h-4 w-4 accent-yellow-600" /></td>
+                  <td onClick={() => onOpen(u.activity_member_id)} className="cursor-pointer px-2 py-2.5 font-head font-semibold hover:text-yellow-600">
                     {u.membership_id || <span className="text-[11px] text-amber-600">— none —</span>}
                   </td>
                   <td onClick={() => onOpen(u.activity_member_id)} className="cursor-pointer px-2 py-2.5">
                     <div className="flex items-center gap-2.5">
-                      <span className="grid h-7 w-7 flex-none place-items-center rounded-full bg-purple-100 font-head text-[10px] font-semibold text-purple-600">{initials(u.member_name)}</span>
+                      <Avatar name={u.member_name} imageUrl={u.image_url} className="h-7 w-7 rounded-full bg-yellow-100" textClassName="font-head text-[10px] font-semibold text-yellow-600" />
                       <span className={u.member_name ? "" : "text-gray-400"}>{u.member_name || NO_NAME}</span>
                     </div>
                   </td>
@@ -587,8 +686,8 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
                   <td className="px-2 py-2.5"><StatusPill active={u.is_acitve === "Y"} /></td>
                   <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{fmtDate(u.inserted_time)}</td>
                   <td className="whitespace-nowrap px-4 py-2 text-right">
-                    <button title="View" onClick={() => onOpen(u.activity_member_id)} className="ml-0.5 inline-grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-purple-100 hover:text-purple-600"><Eye size={15} /></button>
-                    <button title="Reset OTP login" onClick={() => onReset(u)} className="ml-0.5 inline-grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-purple-100 hover:text-purple-600"><KeyRound size={15} /></button>
+                    <button title="View" onClick={() => onOpen(u.activity_member_id)} className="ml-0.5 inline-grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-yellow-100 hover:text-yellow-600"><Eye size={15} /></button>
+                    <button title="Reset OTP login" onClick={() => onReset(u)} className="ml-0.5 inline-grid h-8 w-8 place-items-center rounded-lg text-gray-400 transition-colors hover:bg-yellow-100 hover:text-yellow-600"><KeyRound size={15} /></button>
                   </td>
                 </tr>
               ))}
@@ -608,6 +707,9 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
 // --- DETAIL (draft + Save) --------------------------------------------------
 function DetailScreen({ u, groups, onBack, onSave, onReset }) {
   const [draft, setDraft] = useState(u);
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(u);
 
   const grp = draft.group_id ? groups.find((g) => g.user_group_id === draft.group_id) : null;
@@ -617,7 +719,7 @@ function DetailScreen({ u, groups, onBack, onSave, onReset }) {
   const locList = draft.level_id === 5 ? CONSTITUENCIES : draft.level_id === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
-  const setRole = (id) => { const r = USER_TYPES.find((x) => x.id === id); set({ role_id: id, role_name: r.type, role_short: r.short }); };
+  const setRole = (id) => { const r = USER_TYPES.find((x) => x.id === id); set({ role_id: id, role_name: r.type, role_short: r.short }); setRoleMenuOpen(false); };
   const setLevel = (id) => { const l = USER_LEVELS.find((x) => x.id === id); set({ level_id: id, level_name: l.name, location_value: "" }); };
   const addPersonal = (id) => set({ component_ids: [...draft.component_ids, id].sort((a, b) => a - b) });
   const removePersonal = (id) => set({ component_ids: draft.component_ids.filter((x) => x !== id) });
@@ -625,7 +727,7 @@ function DetailScreen({ u, groups, onBack, onSave, onReset }) {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-purple-600">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
           <ChevronLeft size={16} /> Back to logins
         </button>
         <div className="flex items-center gap-2.5">
@@ -635,108 +737,134 @@ function DetailScreen({ u, groups, onBack, onSave, onReset }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[320px_1fr]">
-        {/* Identity + editable role/scope */}
-        <Card className="p-6">
-          <div className="mb-4 flex items-center gap-3">
-            <div className="grid h-16 w-16 flex-none place-items-center rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 font-head text-[22px] font-bold text-white shadow-md">{initials(draft.member_name)}</div>
+      {/* Identity + every detail field, in one horizontal box. */}
+      <Card className="p-7">
+        <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
+          <div className="flex min-w-[220px] items-center gap-4">
+            <Avatar name={draft.member_name} imageUrl={draft.image_url} className="h-14 w-14 rounded-full bg-gradient-to-br from-amber-600 to-orange-700 shadow-md" textClassName="font-head text-lg font-bold text-white" />
             <div className="min-w-0">
-              <h2 className="font-head text-[17px] font-semibold leading-tight">{draft.member_name || NO_NAME}</h2>
-              <div className="mt-0.5 text-xs text-purple-600">{draft.role_name || "No role"}</div>
+              <div className="truncate font-head text-base font-semibold">{draft.member_name || NO_NAME}</div>
             </div>
           </div>
-          <StatusPill active={draft.is_acitve === "Y"} />
 
-          <div className="mt-4 flex flex-col gap-2.5 text-sm">
-            <KV k="Membership ID" v={draft.membership_id || "— none —"} mono />
-            <KV k="Cadre ID" v={draft.tdp_cadre_id ? `#${draft.tdp_cadre_id}` : "unresolved"} mono />
-            <KV k="Login ID" v={`#${draft.activity_member_id}`} mono />
-          </div>
-
-          <div className="mt-4 flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5"><span className={LABEL}>Mobile (OTP)</span>
-              <input value={draft.mobile_no || ""} onChange={(e) => set({ mobile_no: e.target.value || null })} className={INPUT} placeholder="9xxxxxxxxx" /></label>
-            <label className="flex flex-col gap-1.5"><span className={LABEL}>Role</span>
-              <select value={draft.role_id} onChange={(e) => setRole(+e.target.value)} className={INPUT}>
-                {USER_TYPES.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}
-              </select></label>
-            <label className="flex flex-col gap-1.5"><span className={LABEL}>Scope level</span>
-              <select value={draft.level_id} onChange={(e) => setLevel(+e.target.value)} className={INPUT}>
-                {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
-              </select></label>
-            <label className="flex flex-col gap-1.5"><span className={LABEL}>Location</span>
-              <select value={draft.location_value} onChange={(e) => set({ location_value: e.target.value })} className={INPUT}>
-                <option value="">Select…</option>
-                {locList.map((l) => <option key={l} value={l}>{l}</option>)}
-              </select></label>
-            <label className="flex flex-col gap-1.5"><span className={LABEL}>Group</span>
-              <select value={draft.group_id || ""} onChange={(e) => set({ group_id: e.target.value ? +e.target.value : null })} className={INPUT}>
-                <option value="">No group</option>
-                {groups.map((g) => <option key={g.user_group_id} value={g.user_group_id}>{g.notes}</option>)}
-              </select></label>
-          </div>
-
-          <div className="mt-5 flex gap-2">
-            <button onClick={() => set({ is_acitve: draft.is_acitve === "Y" ? "N" : "Y" })} className={cn(SECONDARY, "flex-1")}>
+          <div className="flex flex-none flex-wrap items-center gap-2">
+            <span className={LABEL}>Role:</span>
+            <RoleBadge label={draft.role_name || "No role"} />
+            <div className="relative">
+              <button onClick={() => setRoleMenuOpen((v) => !v)} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}><Plus size={12} /> Add role</button>
+              {roleMenuOpen && (
+                <div className="absolute right-0 top-full z-10 mt-1 w-44 overflow-hidden rounded-xl border border-gray-100 bg-white py-1 shadow-xl">
+                  {USER_TYPES.map((r) => (
+                    <button key={r.id} onClick={() => setRole(r.id)} className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-yellow-50">{r.type}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <StatusPill active={draft.is_acitve === "Y"} />
+            <button onClick={() => set({ is_acitve: draft.is_acitve === "Y" ? "N" : "Y" })} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}>
               {draft.is_acitve === "Y" ? "Deactivate" : "Activate"}
             </button>
-            <button onClick={onReset} className={cn(SECONDARY, "flex-1")}><KeyRound size={14} /> Reset OTP</button>
+            <button onClick={onReset} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}><KeyRound size={12} /> Reset OTP</button>
           </div>
+        </div>
+
+        {/* Every detail field, directly under the name. */}
+        <div className="mt-5 flex flex-wrap items-center gap-x-7 gap-y-3 border-t border-gray-100 pt-5">
+          <HKV k="MID" v={draft.membership_id || "— none —"} />
+          <FieldInline label="Mobile No">
+            <input value={draft.mobile_no || ""} onChange={(e) => set({ mobile_no: e.target.value || null })}
+              className="w-32 rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400" placeholder="9xxxxxxxxx" />
+          </FieldInline>
+          <FieldInline label="Access Scope">
+            <select value={draft.level_id} onChange={(e) => setLevel(+e.target.value)}
+              className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
+              {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
+            </select>
+          </FieldInline>
+          <FieldInline label="Location">
+            <select value={draft.location_value} onChange={(e) => set({ location_value: e.target.value })}
+              className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
+              <option value="">Select…</option>
+              {locList.map((l) => <option key={l} value={l}>{l}</option>)}
+            </select>
+          </FieldInline>
+          <FieldInline label="Group">
+            <select value={draft.group_id || ""} onChange={(e) => set({ group_id: e.target.value ? +e.target.value : null })}
+              className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
+              <option value="">No group</option>
+              {groups.map((g) => <option key={g.user_group_id} value={g.user_group_id}>{g.notes}</option>)}
+            </select>
+          </FieldInline>
+          <HKV k="Cadre ID" v={draft.tdp_cadre_id ? `#${draft.tdp_cadre_id}` : "unresolved"} />
+          <HKV k="User ID" v={`#${draft.activity_member_id}`} />
+        </div>
+        {dirty && <div className="mt-4 text-[11px] text-gray-400">Changes here are staged — click "Save changes" above to apply them.</div>}
+      </Card>
+
+      <div className="mt-5 flex flex-col gap-5">
+        <Card className="p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <SectionTitle icon={<Layers size={14} />}>Effective access</SectionTitle>
+              {grp && <span className="flex items-center gap-1.5 rounded-full bg-yellow-100 px-2.5 py-0.5 text-[11px] font-medium text-yellow-700"><FolderTree size={11} /> {grp.notes}</span>}
+            </div>
+            <button onClick={() => setAccessOpen((v) => !v)} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}>
+              <Layers size={12} /> Access: {effective.length}
+            </button>
+          </div>
+          {accessOpen && (
+            <>
+              <div className="mt-3.5 divide-y divide-gray-100">
+                {effective.length === 0 && <div className="py-3 text-sm text-amber-600">No dashboards assigned — this account opens to an empty view.</div>}
+                {effective.map(({ id, component, inherited, personal }) => {
+                  const lockedOnly = inherited && !personal;
+                  return (
+                    <div key={id} className="flex items-center justify-between gap-3 py-2.5">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        {inherited
+                          ? <span title="Inherited from group" className="flex-none rounded bg-yellow-100 px-1.5 py-px text-[9px] font-semibold tracking-wide text-yellow-700">GROUP</span>
+                          : <Check size={14} className="flex-none text-yellow-700" />}
+                        <span className={cn("truncate text-sm", lockedOnly ? "text-gray-500" : "text-gray-800")}>{componentLabel(component)}</span>
+                      </div>
+                      {personal && !inherited && (
+                        <button onClick={() => removePersonal(id)} title="Remove personal grant" className="flex-none text-gray-400 hover:text-red-500"><X size={14} /></button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {grp && <div className="mt-2.5 text-[11px] text-gray-400">Grey = inherited from group (change on the group, not here). Purple = personal, removable.</div>}
+            </>
+          )}
         </Card>
 
-        {/* Components */}
-        <div className="flex flex-col gap-5">
-          <Card className="p-6">
-            <div className="flex items-center justify-between">
-              <SectionTitle icon={<Layers size={14} />}>Effective access ({effective.length})</SectionTitle>
-              {grp && <span className="flex items-center gap-1.5 rounded-full bg-purple-100 px-2.5 py-0.5 text-[11px] font-medium text-purple-700"><FolderTree size={11} /> {grp.notes}</span>}
-            </div>
-            <div className="mt-3.5 flex flex-wrap gap-2">
-              {effective.length === 0 && <span className="text-sm text-amber-600">No dashboards assigned — this account opens to an empty view.</span>}
-              {effective.map(({ id, component, inherited, personal }) => {
-                const lockedOnly = inherited && !personal;
-                return (
-                  <span key={id} className={cn(
-                    "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs",
-                    lockedOnly
-                      ? "border-gray-200 bg-gray-50 text-gray-500"
-                      : "border-purple-300 bg-purple-50 text-gray-800",
-                  )}>
-                    {inherited
-                      ? <span title="Inherited from group" className="rounded bg-purple-200/70 px-1.5 py-px text-[9px] tracking-wide text-purple-700">GROUP</span>
-                      : <Check size={13} className="text-purple-500" />}
-                    {componentLabel(component)}
-                    {personal && !inherited && (
-                      <button onClick={() => removePersonal(id)} title="Remove personal grant" className="ml-0.5 flex text-gray-400 hover:text-red-500"><X size={12} /></button>
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-            {grp && <div className="mt-2.5 text-[11px] text-gray-400">Grey = inherited from group (change on the group, not here). Purple = personal, removable.</div>}
-          </Card>
-
-          <Card className="p-6">
+        <Card className="p-6">
+          <div className="flex items-center justify-between">
             <SectionTitle icon={<Plus size={14} />}>Add personal component</SectionTitle>
+            <button onClick={() => setAddOpen((v) => !v)} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}>
+              <Plus size={12} /> {addOpen ? "Hide" : "Add component"}
+            </button>
+          </div>
+          {addOpen && (
             <div className="mt-3.5 flex flex-wrap gap-2">
               {addable.length === 0 && <span className="text-[12.5px] text-gray-400">Nothing left to add — all components are already granted or inherited.</span>}
               {addable.map((c) => (
                 <button key={c.id} onClick={() => addPersonal(c.id)} title="Grant to this user only"
-                  className="flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-2.5 py-1.5 text-xs text-gray-500 transition-colors hover:border-purple-400 hover:text-purple-600">
+                  className="flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-2.5 py-1.5 text-xs text-gray-500 transition-colors hover:border-yellow-400 hover:text-yellow-600">
                   <Plus size={13} /> {componentLabel(c)}
                 </button>
               ))}
             </div>
-          </Card>
+          )}
+        </Card>
 
-          <Card className="p-6">
-            <SectionTitle icon={<ClipboardList size={14} />}>Record</SectionTitle>
-            <div className="mt-3.5 grid grid-cols-2 gap-3 text-sm">
-              <KV k="Created" v={fmtDateTime(u.inserted_time)} />
-              <KV k="Last updated by" v={u.updated_by ? `#${u.updated_by}` : "—"} mono />
-            </div>
-          </Card>
-        </div>
+        <Card className="p-6">
+          <SectionTitle icon={<ClipboardList size={14} />}>Record</SectionTitle>
+          <div className="mt-3.5 grid grid-cols-2 gap-3 text-sm">
+            <KV k="Created" v={fmtDateTime(u.inserted_time)} />
+            <KV k="Last updated by" v={u.updated_by ? `#${u.updated_by}` : "—"} mono />
+          </div>
+        </Card>
       </div>
     </div>
   );
@@ -757,7 +885,7 @@ function GroupsScreen({ groups, members, activeGroupId, setActiveGroupId, onSave
       <Card className="flex items-start gap-3 border-l-4 border-l-amber-400 p-4">
         <AlertTriangle size={16} className="mt-0.5 flex-none text-amber-500" />
         <div className="text-[12.5px] leading-relaxed text-gray-500">
-          <strong className="text-gray-800">Requires two new tables.</strong> Groups here assign components and members, but the current schema has no <code className="text-purple-600">user_group_member</code> or <code className="text-purple-600">user_group_component</code> table. This is a working mock — persistence needs those tables built first.
+          <strong className="text-gray-800">Requires two new tables.</strong> Groups here assign components and members, but the current schema has no <code className="text-yellow-600">user_group_member</code> or <code className="text-yellow-600">user_group_component</code> table. This is a working mock — persistence needs those tables built first.
         </div>
       </Card>
 
@@ -772,7 +900,7 @@ function GroupsScreen({ groups, members, activeGroupId, setActiveGroupId, onSave
           <Card key={g.user_group_id} className={cn(CARD_HOVER, "cursor-pointer p-5")}>
             <div onClick={() => setActiveGroupId(g.user_group_id)}>
               <div className="flex items-start justify-between">
-                <span className="grid h-9 w-9 place-items-center rounded-xl bg-purple-50 text-purple-500"><FolderTree size={16} /></span>
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-yellow-50 text-yellow-700"><FolderTree size={16} /></span>
                 <span className="font-mono text-[10.5px] text-gray-400">#{g.user_group_id}</span>
               </div>
               <div className="mt-3 break-words font-head text-sm font-semibold">{g.notes}</div>
@@ -807,7 +935,7 @@ function GroupEditor({ group, members, groups, onBack, onSave, onDelete, onSetMe
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-purple-600">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
           <ChevronLeft size={16} /> All groups
         </button>
         <div className="flex items-center gap-2.5">
@@ -835,10 +963,10 @@ function GroupEditor({ group, members, groups, onBack, onSave, onDelete, onSetMe
                 return (
                   <button key={c.id} onClick={() => toggleComp(c.id)} className={cn(
                     "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition-colors",
-                    on ? "border-purple-300 bg-purple-50 text-gray-800"
-                       : "border-gray-200 text-gray-500 hover:border-purple-300",
+                    on ? "border-yellow-300 bg-yellow-50 text-gray-800"
+                       : "border-gray-200 text-gray-500 hover:border-yellow-300",
                   )}>
-                    {on ? <Check size={12} className="text-purple-500" /> : <Plus size={12} />} {componentLabel(c)}
+                    {on ? <Check size={12} className="text-yellow-700" /> : <Plus size={12} />} {componentLabel(c)}
                   </button>
                 );
               })}
@@ -849,7 +977,7 @@ function GroupEditor({ group, members, groups, onBack, onSave, onDelete, onSetMe
         <Card className="p-6">
           <SectionTitle icon={<Users size={14} />}>Members ({inGroup.length})</SectionTitle>
           <div className="group relative my-3">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-purple-500" />
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-yellow-700" />
             <input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="Search a login to add…" className={cn(INPUT, "pl-9")} />
           </div>
           {candidates.length > 0 && (
@@ -857,7 +985,7 @@ function GroupEditor({ group, members, groups, onBack, onSave, onDelete, onSetMe
               {candidates.map((m) => (
                 <div key={m.activity_member_id} className="flex items-center justify-between border-b border-gray-100 px-3 py-2 last:border-b-0">
                   <span className="text-sm">{m.member_name} <span className="text-[11px] text-gray-400">{m.membership_id || "no MID"}{m.group_id ? " · in another group" : ""}</span></span>
-                  <button onClick={() => { onSetMemberGroup(m.activity_member_id, group.user_group_id); setMemberQuery(""); }} className="rounded-lg border border-purple-300 px-2.5 py-1 text-xs font-medium text-purple-600 transition-colors hover:bg-purple-50">Add</button>
+                  <button onClick={() => { onSetMemberGroup(m.activity_member_id, group.user_group_id); setMemberQuery(""); }} className="rounded-lg border border-yellow-300 px-2.5 py-1 text-xs font-medium text-yellow-600 transition-colors hover:bg-yellow-50">Add</button>
                 </div>
               ))}
             </div>
@@ -867,7 +995,7 @@ function GroupEditor({ group, members, groups, onBack, onSave, onDelete, onSetMe
             {inGroup.map((m) => (
               <div key={m.activity_member_id} className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2">
                 <div className="flex items-center gap-2.5">
-                  <span className="grid h-7 w-7 place-items-center rounded-full bg-purple-100 font-head text-[10px] font-semibold text-purple-600">{initials(m.member_name)}</span>
+                  <Avatar name={m.member_name} imageUrl={m.image_url} className="h-7 w-7 rounded-full bg-yellow-100" textClassName="font-head text-[10px] font-semibold text-yellow-600" />
                   <span className="text-sm">{m.member_name}<span className="text-[11px] text-gray-400"> · {m.role_name}</span></span>
                 </div>
                 <button onClick={() => onSetMemberGroup(m.activity_member_id, null)} title="Remove from group" className="flex text-gray-400 hover:text-red-500"><X size={15} /></button>
@@ -901,7 +1029,7 @@ function OtpModal({ data, onRegenerate, onClose, onSent }) {
           </div>
           <div className="mb-3.5 flex justify-center gap-2">
             {data.code.split("").map((d, i) => (
-              <span key={i} className="grid w-10 place-items-center rounded-xl border border-purple-200 bg-purple-50 font-head text-2xl font-bold text-purple-700" style={{ height: 52 }}>{d}</span>
+              <span key={i} className="grid w-10 place-items-center rounded-xl border border-yellow-200 bg-yellow-50 font-head text-2xl font-bold text-yellow-700" style={{ height: 52 }}>{d}</span>
             ))}
           </div>
           <div className="flex gap-2">
@@ -923,14 +1051,17 @@ function OtpModal({ data, onRegenerate, onClose, onSent }) {
 }
 
 // --- CREATE SCREEN: MID-first stepped flow, full page ------------------------
-// If the entered membership ID already has a login, we don't let a duplicate
-// be created — we hand off to DetailScreen instead, which already has the
-// role, effective-access and activate/deactivate UI this needs.
-function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) {
+// If the entered membership ID or mobile number already has a login, we don't
+// let a duplicate be created — the found-login panel below lets the admin
+// change its role, activate/deactivate it and review its access inline.
+function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, onToggleActive, onChangeLocation }) {
   const [step, setStep] = useState(1);
+  const [lookupMode, setLookupMode] = useState(null); // null | "mid" | "mobile"
   const [mid, setMid] = useState("");
+  const [lookupMobile, setLookupMobile] = useState("");
   const [cadre, setCadre] = useState(null);
   const [notFound, setNotFound] = useState(false);
+  const [existingMember, setExistingMember] = useState(null);
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [roleId, setRoleId] = useState(12);
@@ -940,19 +1071,50 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
   const [comps, setComps] = useState([...STANDARD_BUNDLE]);
   const [err, setErr] = useState("");
   const [looking, setLooking] = useState(false);
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
+  const [locationMenuOpen, setLocationMenuOpen] = useState(false);
+  const [pendingLevelId, setPendingLevelId] = useState(5);
+  const [pendingLocation, setPendingLocation] = useState("");
+  const [savingRole, setSavingRole] = useState(false);
+  const [savingActive, setSavingActive] = useState(false);
   const lookedUpRef = useRef("");
 
   const locList = levelId === 5 ? CONSTITUENCIES : levelId === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
+  const pendingLocList = pendingLevelId === 5 ? CONSTITUENCIES : pendingLevelId === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
   const grp = groupId ? groups.find((g) => g.user_group_id === groupId) : null;
   const inheritedIds = new Set(grp ? grp.component_ids : []);
 
-  async function doLookup(value) {
-    const q = (value ?? mid).trim();
-    setErr("");
-    if (!q) return setErr("Enter a membership ID first.");
+  function switchMode(mode) {
+    setLookupMode(mode); setErr(""); lookedUpRef.current = "";
+  }
 
-    const existing = members.find((m) => m.membership_id === q);
-    if (existing) { onExisting(existing); return; }
+  async function doLookup(modeArg, valueArg) {
+    const mode = modeArg ?? lookupMode;
+    const raw = valueArg ?? (mode === "mid" ? mid : lookupMobile);
+    const q = raw.trim();
+    setErr("");
+    if (!q) return setErr(mode === "mid" ? "Enter a membership ID first." : "Enter a mobile number first.");
+
+    // Existing logins are already loaded client-side (~1.4k rows) — cheap to check
+    // against either field before touching the backend. membership_id comes back
+    // "#12345678" from the backend, so strip the "#" before comparing to the raw digits typed.
+    const existing = mode === "mid"
+      ? members.find((m) => (m.membership_id || "").replace(/^#/, "") === q)
+      : members.find((m) => m.mobile_no === q);
+    if (existing) {
+      setExistingMember(existing); setCadre(null); setNotFound(false);
+      setStep(2);
+      return;
+    }
+
+    if (mode === "mobile") {
+      // tdp_cadre is 22.5M rows and is only ever point-looked-up by membership_id
+      // (Backend.md) — there's no safe indexed way to resolve a bare mobile
+      // number to a cadre record, so we fall straight to manual entry.
+      setCadre(null); setNotFound(true); setName(""); setMobile(q);
+      setStep(2);
+      return;
+    }
 
     setLooking(true);
     const found = await lookupCadre(q);
@@ -967,14 +1129,66 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
     setStep(2);
   }
 
-  // Auto-lookup as soon as a full 8-digit membership ID has been typed.
+  // Auto-lookup once a full membership ID (8 digits) or mobile number (10 digits) is typed.
+  // The explicit "Look up cadre" button covers the same action for anyone who doesn't want to wait.
   useEffect(() => {
-    const q = mid.trim();
-    if (step === 1 && q.length === 8 && q !== lookedUpRef.current) {
+    if (step !== 1 || !lookupMode) return;
+    const q = (lookupMode === "mid" ? mid : lookupMobile).trim();
+    const targetLen = lookupMode === "mid" ? 8 : 10;
+    if (q.length === targetLen && q !== lookedUpRef.current) {
       lookedUpRef.current = q;
-      doLookup(q);
+      doLookup(lookupMode, q);
     }
-  }, [mid, step]);
+  }, [mid, lookupMobile, lookupMode, step]);
+
+  function resetLookup() {
+    setExistingMember(null); setCadre(null); setNotFound(false);
+    setMid(""); setLookupMobile(""); setName(""); setMobile("");
+    setRoleMenuOpen(false); setLocationMenuOpen(false); setErr("");
+    lookedUpRef.current = ""; setStep(1); setLookupMode(null);
+  }
+
+  function toggleLocationMenu() {
+    if (!locationMenuOpen) {
+      setPendingLevelId(existingMember.level_id || 5);
+      setPendingLocation(existingMember.location_value || "");
+    }
+    setLocationMenuOpen((v) => !v);
+  }
+  function applyExistingLocation() {
+    const l = USER_LEVELS.find((x) => x.id === pendingLevelId);
+    const updated = onChangeLocation(existingMember.activity_member_id,
+      { level_id: pendingLevelId, level_name: l.name, location_value: pendingLocation });
+    setExistingMember(updated);
+    setLocationMenuOpen(false);
+  }
+
+  async function changeExistingRole(r) {
+    setRoleMenuOpen(false);
+    setSavingRole(true);
+    setErr("");
+    try {
+      const updated = await onChangeRole(existingMember.activity_member_id, r);
+      setExistingMember(updated);
+    } catch {
+      setErr("Could not update the role — check the backend is reachable and try again.");
+    } finally {
+      setSavingRole(false);
+    }
+  }
+  async function toggleExistingActive() {
+    const next = existingMember.is_acitve === "Y" ? "N" : "Y";
+    setSavingActive(true);
+    setErr("");
+    try {
+      const updated = await onToggleActive(existingMember.activity_member_id, next);
+      setExistingMember(updated);
+    } catch {
+      setErr("Could not update the status — check the backend is reachable and try again.");
+    } finally {
+      setSavingActive(false);
+    }
+  }
 
   function submit() {
     setErr("");
@@ -998,7 +1212,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
           <div key={s} className="flex flex-1 items-center gap-2">
             <span className={cn(
               "grid h-6 w-6 flex-none place-items-center rounded-full text-[11px] font-semibold",
-              on ? "bg-purple-600 text-white" : "bg-gray-100 text-gray-400",
+              on ? "bg-amber-600 text-white" : "bg-gray-100 text-gray-400",
             )}>{n}</span>
             <span className={cn("text-[11.5px]", on ? "text-gray-800" : "text-gray-400")}>{s}</span>
           </div>
@@ -1010,51 +1224,159 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-purple-600">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
           <ChevronLeft size={16} /> Back to logins
         </button>
       </div>
 
-      <Card className="p-6">
-        <div className="mb-1 flex items-center justify-between">
-          <h3 className="font-head text-[17px] font-semibold">New login</h3>
-        </div>
-        <div className="mb-4 text-xs text-gray-500">Look up a membership ID to pull the member's details, role and current access.</div>
+      {existingMember ? (
+        // Compact, centered card — deliberately not the full-width wizard below.
+        <div className="flex justify-center pt-6">
+          <div className="flex w-full max-w-10xl flex-col items-center gap-5">
+            <Card className="w-full p-12">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-5">
+                  <Avatar name={existingMember.member_name} imageUrl={existingMember.image_url} className="h-40 w-40 rounded-full bg-gradient-to-br from-amber-600 to-orange-700" textClassName="font-head text-2xl font-bold text-white" />
+                  <div className="min-w-0 text-lg">
+                    <div className="text-gray-500">Name: <span className="font-head font-semibold text-gray-900">{existingMember.member_name || NO_NAME}</span></div>
+                    <div className="mt-1 text-gray-500">MID: <span className="font-medium text-gray-800">{existingMember.membership_id || "— none —"}</span></div>
+                    <div className="mt-1 text-gray-500">Mobile No: <span className="font-medium text-gray-800">{existingMember.mobile_no || "— none —"}</span></div>
+                  </div>
+                </div>
+                <div className="flex-none text-right text-base">
+                  <span className={LABEL}>Status:</span> <StatusPill active={existingMember.is_acitve === "Y"} />
+                </div>
+              </div>
 
-        <div className="flex flex-col gap-4">
+              <div className="mt-6 flex flex-wrap items-center gap-x-10 gap-y-2 border-t border-gray-100 pt-6 text-lg">
+                <div className="text-gray-500">Location: <span className="font-medium text-gray-800">{existingMember.level_name ? `${existingMember.level_name}${existingMember.location_value ? ` · ${existingMember.location_value}` : ""}` : "— none —"}</span></div>
+                <div className="flex items-center gap-2 text-gray-500">Role: <RoleBadge label={existingMember.role_name || "No role"} /></div>
+              </div>
+
+              {err && <div className="mt-4"><ErrLine>{err}</ErrLine></div>}
+
+              <div className="mt-7 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                <div className="relative">
+                  <button onClick={toggleLocationMenu} className={cn(SECONDARY, "w-full py-3.5 text-base")}><MapPin size={16} /> Change Location</button>
+                  {locationMenuOpen && (
+                    <div className="absolute left-0 top-full z-10 mt-1 w-60 rounded-xl border border-gray-100 bg-white p-3 shadow-xl">
+                      <label className="flex flex-col gap-1"><span className={LABEL}>Level</span>
+                        <select value={pendingLevelId} onChange={(e) => { setPendingLevelId(+e.target.value); setPendingLocation(""); }} className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs">
+                          {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
+                        </select>
+                      </label>
+                      <label className="mt-2 flex flex-col gap-1"><span className={LABEL}>Location</span>
+                        <select value={pendingLocation} onChange={(e) => setPendingLocation(e.target.value)} className="rounded-lg border border-gray-200 px-2 py-1.5 text-xs">
+                          <option value="">Select…</option>
+                          {pendingLocList.map((l) => <option key={l} value={l}>{l}</option>)}
+                        </select>
+                      </label>
+                      <button onClick={applyExistingLocation} className={cn(PRIMARY, "mt-3 w-full py-1.5 text-xs")}>Apply</button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative">
+                  <button onClick={() => setRoleMenuOpen((v) => !v)} disabled={savingRole} className={cn(SECONDARY, "w-full py-3.5 text-base")}>
+                    {savingRole ? "Saving…" : "Change role"}
+                  </button>
+                  {roleMenuOpen && (
+                    <div className="absolute right-0 top-full z-10 mt-1 w-44 overflow-hidden rounded-xl border border-gray-100 bg-white py-1 shadow-xl">
+                      {USER_TYPES.map((r) => (
+                        <button key={r.id} onClick={() => changeExistingRole(r)} className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-yellow-50">{r.type}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <button onClick={() => onOtp(existingMember)} className={cn(SECONDARY, "w-full py-3.5 text-base")}><KeyRound size={16} /> Reset OTP</button>
+                <button onClick={toggleExistingActive} disabled={savingActive} className={cn(SECONDARY, "w-full py-3.5 text-base")}>
+                  {savingActive ? "Saving…" : existingMember.is_acitve === "Y" ? "Deactivate" : "Activate"}
+                </button>
+              </div>
+            </Card>
+            <div className="text-center text-xs leading-relaxed text-gray-500">This login already exists. Role and active-status changes are written directly to the live database; location changes here are local only.</div>
+            <button onClick={resetLookup} className={SECONDARY}>Look up another</button>
+          </div>
+        </div>
+      ) : (
+      <Card className="min-h-[560px] p-8">
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="font-head text-xl font-semibold">New login</h3>
+        </div>
+        <div className="mb-6 text-sm text-gray-500">Look up a membership ID or mobile number to pull the member's details, role and current access.</div>
+
+        <div className="flex flex-col gap-5">
           <Stepper />
 
           {step === 1 && (
             <>
-              <label className="flex flex-col gap-1.5">
-                <span className={LABEL}>Membership ID</span>
-                <input autoFocus value={mid} onChange={(e) => setMid(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doLookup()} className={INPUT} placeholder="e.g. 20481, 20482, 30017…" />
-              </label>
-              <div className="text-xs leading-relaxed text-gray-500">
-                {looking
-                  ? "Looking up…"
-                  : <>Type a member's 8-digit Membership ID — lookup runs automatically. Try <strong>19457249</strong> for a match; an unknown ID lets you enter the details manually. If the ID already has a login, you'll be taken straight to it.</>}
-              </div>
-              {err && <ErrLine>{err}</ErrLine>}
+              {!lookupMode ? (
+                <div className="flex flex-col items-center gap-5 py-8">
+                  <div className="text-sm text-gray-500">How do you want to look up this member?</div>
+                  <div className="flex flex-wrap justify-center gap-4">
+                    <button type="button" onClick={() => switchMode("mid")}
+                      className="flex w-44 flex-col items-center gap-2.5 rounded-2xl border-2 border-gray-200 p-6 text-center transition-colors hover:border-yellow-400 hover:bg-yellow-50">
+                      <IdCard size={26} className="text-yellow-700" />
+                      <span className="font-head text-sm font-semibold">Membership ID</span>
+                    </button>
+                    <button type="button" onClick={() => switchMode("mobile")}
+                      className="flex w-44 flex-col items-center gap-2.5 rounded-2xl border-2 border-gray-200 p-6 text-center transition-colors hover:border-yellow-400 hover:bg-yellow-50">
+                      <Smartphone size={26} className="text-yellow-700" />
+                      <span className="font-head text-sm font-semibold">Mobile No</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <button type="button" onClick={() => switchMode(null)} className="flex w-fit items-center gap-1 text-xs text-gray-400 transition-colors hover:text-yellow-600">
+                    <ChevronLeft size={13} /> Change lookup method
+                  </button>
+
+                  {lookupMode === "mid" ? (
+                    <label className="flex flex-col gap-1.5">
+                      <span className={LABEL}>Membership ID</span>
+                      <input autoFocus value={mid} onChange={(e) => setMid(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doLookup()} className={INPUT} placeholder="e.g. 20481, 20482, 30017…" />
+                    </label>
+                  ) : (
+                    <label className="flex flex-col gap-1.5">
+                      <span className={LABEL}>Mobile number</span>
+                      <input autoFocus value={lookupMobile} onChange={(e) => setLookupMobile(e.target.value)} onKeyDown={(e) => e.key === "Enter" && doLookup()} className={INPUT} placeholder="e.g. 9448005893" />
+                    </label>
+                  )}
+
+                  <div className="text-xs leading-relaxed text-gray-500">
+                    {looking
+                      ? "Looking up…"
+                      : lookupMode === "mid"
+                        ? <>Type a member's 8-digit Membership ID, or click "Look up cadre" below. Try <strong>19457249</strong> for a match; an unknown ID lets you enter the details manually.</>
+                        : <>Type a 10-digit mobile number, or click "Look up cadre" below — this checks existing logins. Cadre records can only be pulled by Membership ID, not mobile.</>}
+                  </div>
+                  {err && <ErrLine>{err}</ErrLine>}
+                </>
+              )}
             </>
           )}
 
           {step === 2 && (
             <>
               {cadre ? (
-                <Card className="border-l-4 border-l-green-400 p-4">
-                  <div className="mb-2.5 flex items-center gap-2 text-[12.5px] text-green-600"><UserCheck size={15} /> Member found — cadre #{cadre.tdp_cadre_id}</div>
-                  <div className="grid grid-cols-2 gap-2.5 text-sm">
-                    <KV k="Name" v={`${cadre.first_name} ${cadre.last_name}`} />
-                    <KV k="Mobile" v={cadre.mobile_no} />
-                    <KV k="Gender" v={cadre.gender || "—"} />
-                    <KV k="Constituency ID" v={cadre.constituency_id ?? "—"} />
-                    <KV k="Payment" v={cadre.payment_status} />
+                <Card className="border-l-4 border-l-green-400 p-6">
+                  <div className="mb-3 flex items-center gap-2 text-[12.5px] text-green-600"><UserCheck size={15} /> Member found — cadre #{cadre.tdp_cadre_id}</div>
+                  <div className="flex flex-wrap gap-x-8 gap-y-3 text-sm">
+                    <HKV k="Name" v={`${cadre.first_name} ${cadre.last_name || ""}`.trim()} />
+                    <HKV k="Mobile" v={cadre.mobile_no} />
+                    <HKV k="Gender" v={cadre.gender || "—"} />
+                    <HKV k="Constituency ID" v={cadre.constituency_id ?? "—"} />
+                    <HKV k="Payment" v={cadre.payment_status} />
                   </div>
                 </Card>
               ) : (
-                <Card className="border-l-4 border-l-amber-400 p-4">
-                  <div className="flex items-center gap-2 text-[12.5px] text-amber-600"><AlertTriangle size={15} /> No cadre found for MID {mid}. Enter the name manually — this login won't resolve to a cadre record.</div>
+                <Card className="border-l-4 border-l-amber-400 p-6">
+                  <div className="flex items-center gap-2 text-[12.5px] text-amber-600">
+                    <AlertTriangle size={15} />
+                    {lookupMode === "mid" ? `No cadre found for MID ${mid}.` : `No existing login or cadre match for mobile ${lookupMobile}.`} Enter the details manually — this login won't resolve to a cadre record unless you supply a valid Membership ID.
+                  </div>
                 </Card>
               )}
               <div className="grid grid-cols-2 gap-3">
@@ -1062,6 +1384,10 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
                   <input value={name} onChange={(e) => setName(e.target.value)} readOnly={!!cadre} className={cn(INPUT, cadre && "opacity-70")} placeholder="Full name" /></label>
                 <label className="flex flex-col gap-1.5"><span className={LABEL}>Mobile (OTP)</span>
                   <input value={mobile} onChange={(e) => setMobile(e.target.value)} className={INPUT} placeholder="9xxxxxxxxx" /></label>
+                {!cadre && (
+                  <label className="flex flex-col gap-1.5"><span className={LABEL}>Membership ID (optional)</span>
+                    <input value={mid} onChange={(e) => setMid(e.target.value)} className={INPUT} placeholder="If known" /></label>
+                )}
               </div>
               {err && <ErrLine>{err}</ErrLine>}
             </>
@@ -1088,7 +1414,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
               <div>
                 <div className="mb-2 flex items-center justify-between">
                   <span className={LABEL}>Components {grp && <span className="text-gray-400">— grey are inherited from {grp.notes}</span>}</span>
-                  <button onClick={() => setComps([...STANDARD_BUNDLE])} className="rounded-full border border-purple-300 px-2.5 py-1 text-[11px] font-medium text-purple-600 transition-colors hover:bg-purple-50">Apply standard bundle</button>
+                  <button onClick={() => setComps([...STANDARD_BUNDLE])} className="rounded-full border border-yellow-300 px-2.5 py-1 text-[11px] font-medium text-yellow-600 transition-colors hover:bg-yellow-50">Apply standard bundle</button>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {COMPONENTS.map((c) => {
@@ -1098,10 +1424,10 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
                       <button key={c.id} onClick={() => !inh && toggle(c.id)} title={inh ? "Inherited from group" : ""} className={cn(
                         "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px]",
                         inh ? "cursor-default border-gray-200 bg-gray-50 text-gray-400"
-                            : on ? "border-purple-300 bg-purple-50 text-gray-800"
-                                 : "border-gray-200 text-gray-500 hover:border-purple-300",
+                            : on ? "border-yellow-300 bg-yellow-50 text-gray-800"
+                                 : "border-gray-200 text-gray-500 hover:border-yellow-300",
                       )}>
-                        {inh ? <span className="rounded bg-purple-200/70 px-1 py-px text-[9px] text-purple-700">GROUP</span> : on ? <Check size={12} className="text-purple-500" /> : <Plus size={12} />} {componentLabel(c)}
+                        {inh ? <span className="rounded bg-yellow-200/70 px-1 py-px text-[9px] text-yellow-700">GROUP</span> : on ? <Check size={12} className="text-yellow-700" /> : <Plus size={12} />} {componentLabel(c)}
                       </button>
                     );
                   })}
@@ -1114,11 +1440,12 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onExisting }) 
 
         <div className="mt-5 flex justify-between gap-2.5 border-t border-gray-100 pt-4">
           <button onClick={step === 1 ? onBack : () => setStep(step - 1)} className={SECONDARY}>{step === 1 ? "Cancel" : "Back"}</button>
-          {step === 1 && <button onClick={() => doLookup()} disabled={looking} className={PRIMARY}>{looking ? "Looking up…" : "Look up cadre"}</button>}
+          {step === 1 && lookupMode && <button onClick={() => doLookup()} disabled={looking} className={PRIMARY}>{looking ? "Looking up…" : "Look up cadre"}</button>}
           {step === 2 && <button onClick={() => { if (!name.trim()) return setErr("Name is required."); setErr(""); setStep(3); }} className={PRIMARY}>Next: access</button>}
           {step === 3 && <button onClick={submit} className={PRIMARY}>Create &amp; generate OTP</button>}
         </div>
       </Card>
+      )}
     </div>
   );
 }

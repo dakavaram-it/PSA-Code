@@ -13,17 +13,17 @@
   }
 }
 
-/* Slim, purple-tinted scrollbars to match the reference's soft look. */
+/* Slim, warm-yellow-tinted scrollbars to match the theme. */
 ::-webkit-scrollbar {
   width: 9px;
   height: 9px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(124, 58, 237, 0.25);
+  background: rgba(202, 138, 4, 0.3);
   border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(124, 58, 237, 0.45);
+  background: rgba(202, 138, 4, 0.5);
 }
 
 @media (prefers-reduced-motion: reduce) {

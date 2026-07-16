@@ -4,18 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A **read-only** admin console for the `activity_member` login system in the live `dakavara_pa`
+A **mostly read-only** admin console for the `activity_member` login system in the live `dakavara_pa`
 production database (AWS RDS, MySQL 8.0.42). It has two parts:
 
-- `Backend/` — FastAPI + PyMySQL, exposes 6 GET-only endpoints, port 4000.
+- `Backend/` — FastAPI + PyMySQL, 6 GET-only endpoints plus 2 narrow PUT (write) endpoints, port 4000.
 - `Frontend/` — Vite + React (JS, not TS), port 5173, Tailwind for styling.
 
-The backend issues `SET SESSION TRANSACTION READ ONLY` on every connection and only ever runs
-`SELECT`. **Never add INSERT/UPDATE/DELETE/DDL** — the create/edit/OTP/activate flows in the UI are
-intentionally client-side mocks with no write API behind them yet (see `Dakavara_PA_Dashboard_User_Creation_Reference.md`
-for the planned write path, which is out of scope for this codebase today). The Groups screen is
-also fully mock — `user_groups`/`user_group` tables exist but have no FK link to `activity_member`,
-so there is nothing real to wire up.
+GET endpoints use `connect()`, which issues `SET SESSION TRANSACTION READ ONLY` on every connection
+and only ever runs `SELECT`. Two endpoints are a deliberate, narrow exception — `PUT
+/api/members/{id}/role` and `PUT /api/members/{id}/active` — added to back the "New login"
+existing-login panel's role-change and activate/deactivate controls. They use a separate
+`connect_write()` (no read-only pragma) and are the *only* place in this codebase that writes to the
+DB. **Do not widen this** — no other INSERT/UPDATE/DELETE/DDL, and no new write endpoints, without
+being asked. Everything else that looks like a write in the UI (bulk activate/deactivate on the
+Users screen, the role/mobile/level/location edits on the Detail screen, full account creation) is
+still an intentionally client-side mock with no write API behind it (see
+`Dakavara_PA_Dashboard_User_Creation_Reference.md` for the planned full write path, still out of
+scope). **There is no authentication in front of the backend** — anyone who can reach it can call
+the two write endpoints; treat this as a real gap, not a formality, before this is ever exposed
+outside a trusted network. The Groups screen is also fully mock — `user_groups`/`user_group` tables
+exist but have no FK link to `activity_member`, so there is nothing real to wire up.
 
 ## Run / dev commands
 
@@ -82,13 +90,16 @@ them. Full schema, live samples, and query rationale are in `Backend.md`.
 Single file, no ORM. `MEMBER_SELECT` is the one query that matters — it joins
 `activity_member → tdp_cadre → access_type/access_level/component` and `GROUP_CONCAT`s
 component ids into a comma string per login, collapsing the member×role×component fan-out into one
-row per login. `shape()` turns that comma string into an `int[]` before returning JSON. Every
+row per login. `shape()` turns that comma string into an `int[]` before returning JSON. Every GET
 endpoint opens a fresh per-request connection (`connect()`) — thread-safe under uvicorn's pool, and
-each connection is forced read-only at the session level as belt-and-braces.
+each connection is forced read-only at the session level as belt-and-braces. The two PUT endpoints
+use `connect_write()` instead (no read-only pragma, explicit `commit()`), and re-run `MEMBER_SELECT`
+after writing so the response always reflects the post-write row.
 
 Endpoints: `GET /api/members` (`?status=all|active|inactive`), `GET /api/members/{id}`,
 `GET /api/lookups/user-types`, `GET /api/lookups/user-levels`, `GET /api/lookups/components`,
-`GET /api/cadre/{mid}`.
+`GET /api/cadre/{mid}`, `PUT /api/members/{id}/role` (`{user_type_id}`), `PUT /api/members/{id}/active`
+(`{is_active: "Y"|"N"}`).
 
 ### Frontend
 
@@ -105,11 +116,12 @@ Endpoints: `GET /api/members` (`?status=all|active|inactive`), `GET /api/members
   into module-scope `let USER_TYPES/USER_LEVELS/COMPONENTS` (avoids prop-drilling), then screens are
   plain functions switched on a `screen` state string inside `AdminConsole()` — `Overview`,
   `UsersScreen`, `DetailScreen`, `GroupsScreen`/`GroupEditor` (mock), plus `OtpModal` and
-  `CreateModal` (mock). Small shared UI atoms (`Card`, `StatusPill`, `RoleBadge`, `Field`, `Ring`,
-  etc.) live at the top of the same file.
+  `CreateScreen` (mostly mock — its existing-login panel calls the two real PUT endpoints above).
+  Small shared UI atoms (`Card`, `StatusPill`, `RoleBadge`, `Field`, `Ring`, etc.) live at the top of
+  the same file.
 - `Frontend/src/lib/utils.js` exports `cn()` (clsx + tailwind-merge) — use it whenever composing
   conditional Tailwind classes, matching the "Smart AI Interview / Jobseeker" design system already
-  used throughout (purple/indigo gradients, rounded-2xl cards, pill CTAs).
+  used throughout (warm white background, yellow/amber/orange gradients, rounded-2xl cards, pill CTAs).
 - Groups (`GroupsScreen`, `INITIAL_GROUPS`, `effectiveComponents()`) are entirely frontend mock state
   — the schema has no member↔group or group↔component link. Don't try to wire this to the backend
   without a schema change.

@@ -4,26 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A **mostly read-only** admin console for the `activity_member` login system in the live `dakavara_pa`
-production database (AWS RDS, MySQL 8.0.42). It has two parts:
+An admin console for the `activity_member` login system in the live `dakavara_pa` production
+database (AWS RDS, MySQL 8.0.42). It has two parts:
 
-- `Backend/` — FastAPI + PyMySQL, 6 GET-only endpoints plus 2 narrow PUT (write) endpoints, port 4000.
+- `Backend/` — FastAPI + PyMySQL, GET-only read endpoints plus real CRUD for a login (create,
+  update role/level/active, soft-delete), port 4000.
 - `Frontend/` — Vite + React (JS, not TS), port 5173, Tailwind for styling.
 
 GET endpoints use `connect()`, which issues `SET SESSION TRANSACTION READ ONLY` on every connection
-and only ever runs `SELECT`. Two endpoints are a deliberate, narrow exception — `PUT
-/api/members/{id}/role` and `PUT /api/members/{id}/active` — added to back the "New login"
-existing-login panel's role-change and activate/deactivate controls. They use a separate
-`connect_write()` (no read-only pragma) and are the *only* place in this codebase that writes to the
-DB. **Do not widen this** — no other INSERT/UPDATE/DELETE/DDL, and no new write endpoints, without
-being asked. Everything else that looks like a write in the UI (bulk activate/deactivate on the
-Users screen, the role/mobile/level/location edits on the Detail screen, full account creation) is
-still an intentionally client-side mock with no write API behind it (see
-`Dakavara_PA_Dashboard_User_Creation_Reference.md` for the planned full write path, still out of
-scope). **There is no authentication in front of the backend** — anyone who can reach it can call
-the two write endpoints; treat this as a real gap, not a formality, before this is ever exposed
-outside a trusted network. The Groups screen is also fully mock — `user_groups`/`user_group` tables
-exist but have no FK link to `activity_member`, so there is nothing real to wire up.
+and only ever runs `SELECT`. The write endpoints — `POST /api/members`, `PUT /api/members/{id}/role`,
+`PUT /api/members/{id}/level`, `PUT /api/members/{id}/active`, `DELETE /api/members/{id}` — are the
+*only* place in this codebase that writes to the DB, and only ever touch `activity_member` and its
+three grant junctions (`activity_member_access_type`, `activity_member_access_level`,
+`activity_member_component`), plus invalidating `login_otp_details` rows on deactivate/delete. They
+use a separate `connect_write()` (no read-only pragma). **Do not widen this further** — no writes to
+`tdp_cadre` (full account/identity creation stays out of scope, see
+`Dakavara_PA_Dashboard_User_Creation_Reference.md`), no new tables touched, no DDL, without being
+asked. Everything else that looks like a write in the UI (bulk activate/deactivate on the Users
+screen, the mobile/component edits on the Detail screen's "Save changes" staged draft, the "Change
+Location" picker) is still an intentionally client-side mock with no write API behind it — the
+location picker in particular has no real name→id mapping for `activity_location_value`, so it's
+deliberately not wired up (see `activity_location_value` note below). **There is no authentication in
+front of the backend** — anyone who can reach it can call every write endpoint, including delete;
+treat this as a real gap, not a formality, before this is ever exposed outside a trusted network. The
+Groups screen is also fully mock — `user_groups`/`user_group` tables exist but have no FK link to
+`activity_member`, so there is nothing real to wire up.
 
 ## Run / dev commands
 
@@ -92,14 +97,25 @@ Single file, no ORM. `MEMBER_SELECT` is the one query that matters — it joins
 component ids into a comma string per login, collapsing the member×role×component fan-out into one
 row per login. `shape()` turns that comma string into an `int[]` before returning JSON. Every GET
 endpoint opens a fresh per-request connection (`connect()`) — thread-safe under uvicorn's pool, and
-each connection is forced read-only at the session level as belt-and-braces. The two PUT endpoints
-use `connect_write()` instead (no read-only pragma, explicit `commit()`), and re-run `MEMBER_SELECT`
-after writing so the response always reflects the post-write row.
+each connection is forced read-only at the session level as belt-and-braces. The write endpoints use
+`connect_write()` instead (no read-only pragma); multi-statement writes (create, cascading delete)
+go through `run_write_tx(fn)`, which runs `fn(cursor)` as one committed transaction and rolls back on
+error, so a login is never left half-created. Every write endpoint re-runs `MEMBER_SELECT` after
+writing so the response always reflects the post-write row.
 
 Endpoints: `GET /api/members` (`?status=all|active|inactive`), `GET /api/members/{id}`,
 `GET /api/lookups/user-types`, `GET /api/lookups/user-levels`, `GET /api/lookups/components`,
-`GET /api/cadre/{mid}`, `PUT /api/members/{id}/role` (`{user_type_id}`), `PUT /api/members/{id}/active`
-(`{is_active: "Y"|"N"}`).
+`GET /api/cadre/{mid}`, `POST /api/members` (`{tdp_cadre_id, user_type_id, user_level_id,
+location_value, component_ids}` — creates the login + all three grant rows in one transaction; 409 if
+the cadre already has one), `PUT /api/members/{id}/role` (`{user_type_id}`), `PUT
+/api/members/{id}/level` (`{user_level_id, location_value}`), `PUT /api/members/{id}/active`
+(`{is_active: "Y"|"N"}`), `DELETE /api/members/{id}` (soft-delete — cascades `is_active`/`is_valid`
+`= 'N'` across every grant table, not just `activity_member.is_acitve`, unlike plain deactivate).
+
+`POST /api/members` treats `activity_member_id = 581` as a reserved/placeholder record and ignores
+it when checking whether a cadre already has a login — this came from the query the endpoint was
+built from; it isn't documented elsewhere, so don't "clean up" the exclusion without checking what
+that record actually is.
 
 ### Frontend
 
@@ -115,10 +131,12 @@ Endpoints: `GET /api/members` (`?status=all|active|inactive`), `GET /api/members
 - `App.jsx` is a single large file containing the whole console: lookups are fetched once at startup
   into module-scope `let USER_TYPES/USER_LEVELS/COMPONENTS` (avoids prop-drilling), then screens are
   plain functions switched on a `screen` state string inside `AdminConsole()` — `Overview`,
-  `UsersScreen`, `DetailScreen`, `GroupsScreen`/`GroupEditor` (mock), plus `OtpModal` and
-  `CreateScreen` (mostly mock — its existing-login panel calls the two real PUT endpoints above).
-  Small shared UI atoms (`Card`, `StatusPill`, `RoleBadge`, `Field`, `Ring`, etc.) live at the top of
-  the same file.
+  `UsersScreen`, `DetailScreen` (real delete via the "Delete login" button; everything else on this
+  screen is still the staged client-side mock draft), `GroupsScreen`/`GroupEditor` (mock), plus
+  `OtpModal` and `CreateScreen` (its existing-login panel calls the real role/active PUT endpoints;
+  its "not found" step creates a real login via `POST /api/members` when a cadre was matched by MID,
+  or falls back to the pre-existing mock when there's no cadre to link to). Small shared UI atoms
+  (`Card`, `StatusPill`, `RoleBadge`, `Field`, `Ring`, etc.) live at the top of the same file.
 - `Frontend/src/lib/utils.js` exports `cn()` (clsx + tailwind-merge) — use it whenever composing
   conditional Tailwind classes, matching the "Smart AI Interview / Jobseeker" design system already
   used throughout (warm white background, yellow/amber/orange gradients, rounded-2xl cards, pill CTAs).

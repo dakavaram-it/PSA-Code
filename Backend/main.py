@@ -1,17 +1,22 @@
-# Backend/main.py — mostly-read-only data layer for the UA admin console.
+# Backend/main.py — data layer for the UA admin console.
 # Python + FastAPI + PyMySQL. Powers the frontend with real dakavara_pa data.
-# Almost everything here is SELECT-only. Two narrow exceptions write to the
-# live DB: PUT /api/members/{id}/role and PUT /api/members/{id}/active,
-# added to back the "New login" existing-login panel's role-change and
-# activate/deactivate controls. Every other endpoint remains GET-only.
+# Most endpoints are SELECT-only. The write endpoints below cover full CRUD
+# for a login (activity_member + its access_type/access_level/component
+# grants): POST /api/members creates a login (and grants) for a cadre that
+# doesn't have one yet, PUT .../role, .../level and .../active update an
+# existing login's role, geographic scope and active flag, and DELETE
+# /api/members/{id} soft-deletes a login by cascading is_active/is_valid='N'
+# across every grant table (distinct from deactivate, which only flips
+# activity_member.is_acitve and leaves grants intact for a later reactivate).
 # There is still no authentication in front of this API — anyone who can
-# reach it can call the two write endpoints below. Put this behind auth
-# before it's exposed outside a trusted network.
-# See Backend.md for the contract and query rationale.
+# reach it can call these write endpoints. Put this behind auth before it's
+# exposed outside a trusted network.
+# See Backend.md for the read contract and query rationale.
 #
 # Run:  pip install -r requirements.txt
 #       python main.py            (or: uvicorn main:app --port 4000)
 import os
+from typing import List, Optional
 
 import pymysql
 from dotenv import load_dotenv
@@ -74,6 +79,22 @@ def run_write(sql, args=None):
         conn.close()
 
 
+def run_write_tx(fn):
+    """Run fn(cursor) as one committed transaction; rolls back on error.
+    Used where several statements must land atomically (create, cascading delete)."""
+    conn = connect_write()
+    try:
+        with conn.cursor() as cur:
+            result = fn(cur)
+        conn.commit()
+        return result
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 # component_ids comes back as a comma string; the UI wants an int array.
 def shape(r):
     ids = r.get("component_ids")
@@ -106,7 +127,9 @@ GROUP_BY = """ GROUP BY AM.activity_member_id, AM.member_name, AM.tdp_cadre_id,
   AM.inserted_time, AM.updated_by, AM.is_acitve, TC.membership_id, TC.mobile_no, TC.image"""
 
 app = FastAPI(title="UA admin API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "PUT"], allow_headers=["*"])
+# PUT/POST/DELETE listed here too so re-enabling the commented-out write
+# endpoints below doesn't also require remembering to update this line.
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "PUT", "POST", "DELETE"], allow_headers=["*"])
 
 
 class RoleUpdate(BaseModel):
@@ -115,6 +138,19 @@ class RoleUpdate(BaseModel):
 
 class ActiveUpdate(BaseModel):
     is_active: str  # 'Y' or 'N'
+
+
+class LevelUpdate(BaseModel):
+    user_level_id: int
+    location_value: Optional[int] = None
+
+
+class MemberCreate(BaseModel):
+    tdp_cadre_id: int
+    user_type_id: int
+    user_level_id: int
+    location_value: Optional[int] = None
+    component_ids: List[int] = []
 
 
 # 1) member list  (?status=all|active|inactive, default active)
@@ -218,59 +254,243 @@ def cadre(mid: str):
     return row
 
 
-# 5) change a login's role (New login → existing-login panel).
-# Deactivates any currently-active role grant(s), then reactivates a matching
-# prior grant or inserts a fresh one — mirrors the reference doc's step 6.
-@app.put("/api/members/{member_id}/role")
-def update_role(member_id: int, body: RoleUpdate):
-    if not run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True):
-        raise HTTPException(status_code=404, detail="not found")
+# 4b) cadre lookup by mobile number (create-flow step 1, read-only).
+# mobile_no is indexed but NOT unique — multiple cadre (e.g. family members
+# sharing one phone) can share a number, so this returns every match
+# (possibly []). This is the admin's reference lookup query verbatim (column
+# aliases kept as given, unlike the rest of this file's snake_case, so the
+# response is recognisable against the source query) with two things worth
+# knowing:
+#   - AM only joins on is_acitve='Y', so a *deactivated* login reads
+#     identical to "no login yet" here (AMID/LOCLEVEL/TEAMNAME all null) —
+#     unlike create_member's duplicate check below, which still counts a
+#     deactivated activity_member row as "already exists" and refuses to
+#     create a second one.
+#   - No GROUP BY: a cadre with more than one active role or access-level
+#     grant at once (rare in this data) fans out into multiple rows.
+# is_deleted='N' was added (not in the source query) so a deleted cadre
+# record can't show up here and then 404 when picked for creation.
+CADRE_BY_MOBILE_SELECT = f"""
+  SELECT
+      CR.tdp_cadre_id AS CADREID,
+      UPPER(CR.first_name) AS MEMBERNAME,
+      CR.mobile_no AS MOBILENO,
+      CONCAT('#', CR.membership_id) AS MID,
+      CONCAT("{CADRE_IMAGE_BASE}", CR.image) AS IMAGE,
+      AM.activity_member_id AS AMID,
+      UL.level AS LOCLEVEL,
+      AMAL.activity_location_value AS LOCVALUE,
+      CONCAT('#', LOD.otp) AS OTP,
+      CONCAT('#', DATE(LOD.generated_time)) AS EXPDATE,
+      UT.short_name AS TEAMNAME
+  FROM tdp_cadre CR
+  LEFT JOIN activity_member AM ON CR.tdp_cadre_id = AM.tdp_cadre_id AND AM.is_acitve = 'Y' AND AM.activity_member_id <> 581
+  LEFT JOIN activity_member_access_level AMAL ON AM.activity_member_id = AMAL.activity_member_id
+  LEFT JOIN user_level UL ON AMAL.activity_member_level_id = UL.user_level_id
+  LEFT JOIN activity_member_access_type AMAT ON AM.activity_member_id = AMAT.activity_member_id AND AMAT.is_active = 'Y'
+  LEFT JOIN user_type UT ON AMAT.user_type_id = UT.user_type_id
+  LEFT JOIN login_otp_details LOD ON CR.tdp_cadre_id = LOD.tdp_cadre_id AND LOD.is_valid = 'Y'
+  WHERE CR.mobile_no = %s AND CR.is_deleted = 'N'
+  ORDER BY CR.tdp_cadre_id, UL.user_level_id, UT.order_no
+"""
 
-    run_write(
-        "UPDATE activity_member_access_type SET is_active='N' "
-        "WHERE activity_member_id=%s AND is_active='Y'",
-        (member_id,),
-    )
-    existing = run(
-        "SELECT activity_member_access_type_id FROM activity_member_access_type "
-        "WHERE activity_member_id=%s AND user_type_id=%s LIMIT 1",
-        (member_id, body.user_type_id), one=True,
-    )
-    if existing:
-        run_write(
-            "UPDATE activity_member_access_type SET is_active='Y' WHERE activity_member_access_type_id=%s",
-            (existing["activity_member_access_type_id"],),
-        )
-    else:
-        run_write(
-            "INSERT INTO activity_member_access_type (activity_member_id, user_type_id, is_active) "
-            "VALUES (%s, %s, 'Y')",
-            (member_id, body.user_type_id),
-        )
-    row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
-    return shape(row)
+
+@app.get("/api/cadre/by-mobile/{mobile}")
+def cadre_by_mobile(mobile: str):
+    return run(CADRE_BY_MOBILE_SELECT, (mobile,))
 
 
-# 6) activate / deactivate a login (New login → existing-login panel).
-# Deactivating also kills any live OTPs, mirroring Backend.md's reference flow.
-@app.put("/api/members/{member_id}/active")
-def update_active(member_id: int, body: ActiveUpdate):
-    if body.is_active not in ("Y", "N"):
-        raise HTTPException(status_code=400, detail="is_active must be 'Y' or 'N'")
-
-    member_row = run("SELECT tdp_cadre_id FROM activity_member WHERE activity_member_id=%s", (member_id,), one=True)
-    if not member_row:
-        raise HTTPException(status_code=404, detail="not found")
-
-    run_write("UPDATE activity_member SET is_acitve=%s WHERE activity_member_id=%s", (body.is_active, member_id))
-    if body.is_active == "N" and member_row["tdp_cadre_id"]:
-        run_write(
-            "UPDATE login_otp_details SET is_valid='N', updated_time=NOW() "
-            "WHERE tdp_cadre_id=%s AND is_valid='Y'",
-            (member_row["tdp_cadre_id"],),
-        )
-    row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
-    return shape(row)
+# --- WRITE ACCESS DISABLED FOR NOW -----------------------------------------
+# Every write endpoint (create/role/active/level/delete) is commented out
+# below, pending auth in front of this API — see the module docstring at the
+# top of this file. The code is kept in place, unchanged, so it can be
+# re-enabled later by uncommenting; nothing here should be treated as deleted.
+# The backend is GET-only while this block is commented out.
+#
+# # 5) create a login (New login → cadre found, no activity_member yet).
+# # A cadre only gets dashboard access once it has an activity_member row plus
+# # its three grant rows (role/level/components) — mirrors the reference doc's
+# # 6-step workflow, steps 3-6. Refuses to create a second login for a cadre
+# # that already has one (activity_member_id 581 is a reserved/placeholder
+# # record and is ignored for this check, per the source query this was built
+# # from) — use the role/level/active endpoints to change an existing login
+# # instead of creating a duplicate.
+# @app.post("/api/members", status_code=201)
+# def create_member(body: MemberCreate):
+#     cadre_row = run(
+#         "SELECT tdp_cadre_id, first_name, last_name FROM tdp_cadre "
+#         "WHERE tdp_cadre_id=%s AND is_deleted='N'",
+#         (body.tdp_cadre_id,), one=True,
+#     )
+#     if not cadre_row:
+#         raise HTTPException(status_code=404, detail="no cadre for that id")
+#
+#     existing = run(
+#         "SELECT activity_member_id FROM activity_member "
+#         "WHERE tdp_cadre_id=%s AND activity_member_id <> 581",
+#         (body.tdp_cadre_id,), one=True,
+#     )
+#     if existing:
+#         raise HTTPException(status_code=409, detail="a login already exists for this cadre")
+#
+#     member_name = f"{cadre_row['first_name'] or ''} {cadre_row['last_name'] or ''}".strip() or None
+#
+#     def _create(cur):
+#         cur.execute(
+#             "INSERT INTO activity_member (tdp_cadre_id, member_name, is_acitve, inserted_time) "
+#             "VALUES (%s, %s, 'Y', NOW())",
+#             (body.tdp_cadre_id, member_name),
+#         )
+#         new_id = cur.lastrowid
+#         cur.execute(
+#             "INSERT INTO activity_member_access_type (activity_member_id, user_type_id, is_active) "
+#             "VALUES (%s, %s, 'Y')",
+#             (new_id, body.user_type_id),
+#         )
+#         cur.execute(
+#             "INSERT INTO activity_member_access_level "
+#             "(activity_member_id, activity_member_level_id, activity_location_value, is_active) "
+#             "VALUES (%s, %s, %s, 'Y')",
+#             (new_id, body.user_level_id, body.location_value),
+#         )
+#         for component_id in body.component_ids:
+#             cur.execute(
+#                 "INSERT INTO activity_member_component (activity_member_id, component_id, is_valid) "
+#                 "VALUES (%s, %s, 'Y')",
+#                 (new_id, component_id),
+#             )
+#         return new_id
+#
+#     member_id = run_write_tx(_create)
+#     row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
+#     return shape(row)
+#
+#
+# # 6) change a login's role (New login → existing-login panel).
+# # Deactivates any currently-active role grant(s), then reactivates a matching
+# # prior grant or inserts a fresh one — mirrors the reference doc's step 6.
+# @app.put("/api/members/{member_id}/role")
+# def update_role(member_id: int, body: RoleUpdate):
+#     if not run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True):
+#         raise HTTPException(status_code=404, detail="not found")
+#
+#     run_write(
+#         "UPDATE activity_member_access_type SET is_active='N' "
+#         "WHERE activity_member_id=%s AND is_active='Y'",
+#         (member_id,),
+#     )
+#     existing = run(
+#         "SELECT activity_member_access_type_id FROM activity_member_access_type "
+#         "WHERE activity_member_id=%s AND user_type_id=%s LIMIT 1",
+#         (member_id, body.user_type_id), one=True,
+#     )
+#     if existing:
+#         run_write(
+#             "UPDATE activity_member_access_type SET is_active='Y' WHERE activity_member_access_type_id=%s",
+#             (existing["activity_member_access_type_id"],),
+#         )
+#     else:
+#         run_write(
+#             "INSERT INTO activity_member_access_type (activity_member_id, user_type_id, is_active) "
+#             "VALUES (%s, %s, 'Y')",
+#             (member_id, body.user_type_id),
+#         )
+#     row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
+#     return shape(row)
+#
+#
+# # 7) activate / deactivate a login (New login → existing-login panel).
+# # Deactivating also kills any live OTPs, mirroring Backend.md's reference flow.
+# @app.put("/api/members/{member_id}/active")
+# def update_active(member_id: int, body: ActiveUpdate):
+#     if body.is_active not in ("Y", "N"):
+#         raise HTTPException(status_code=400, detail="is_active must be 'Y' or 'N'")
+#
+#     member_row = run("SELECT tdp_cadre_id FROM activity_member WHERE activity_member_id=%s", (member_id,), one=True)
+#     if not member_row:
+#         raise HTTPException(status_code=404, detail="not found")
+#
+#     run_write("UPDATE activity_member SET is_acitve=%s WHERE activity_member_id=%s", (body.is_active, member_id))
+#     if body.is_active == "N" and member_row["tdp_cadre_id"]:
+#         run_write(
+#             "UPDATE login_otp_details SET is_valid='N', updated_time=NOW() "
+#             "WHERE tdp_cadre_id=%s AND is_valid='Y'",
+#             (member_row["tdp_cadre_id"],),
+#         )
+#     row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
+#     return shape(row)
+#
+#
+# # 8) change a login's geographic scope (Detail screen). Same
+# # deactivate-then-reactivate-or-insert pattern as the role endpoint above.
+# # location_value is compared with <=> (NULL-safe equals) since a level like
+# # STATE may legitimately carry no location_value.
+# @app.put("/api/members/{member_id}/level")
+# def update_level(member_id: int, body: LevelUpdate):
+#     if not run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True):
+#         raise HTTPException(status_code=404, detail="not found")
+#
+#     run_write(
+#         "UPDATE activity_member_access_level SET is_active='N' "
+#         "WHERE activity_member_id=%s AND is_active='Y'",
+#         (member_id,),
+#     )
+#     existing = run(
+#         "SELECT activity_member_access_level_id FROM activity_member_access_level "
+#         "WHERE activity_member_id=%s AND activity_member_level_id=%s AND activity_location_value <=> %s LIMIT 1",
+#         (member_id, body.user_level_id, body.location_value), one=True,
+#     )
+#     if existing:
+#         run_write(
+#             "UPDATE activity_member_access_level SET is_active='Y' WHERE activity_member_access_level_id=%s",
+#             (existing["activity_member_access_level_id"],),
+#         )
+#     else:
+#         run_write(
+#             "INSERT INTO activity_member_access_level "
+#             "(activity_member_id, activity_member_level_id, activity_location_value, is_active) "
+#             "VALUES (%s, %s, %s, 'Y')",
+#             (member_id, body.user_level_id, body.location_value),
+#         )
+#     row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
+#     return shape(row)
+#
+#
+# # 9) soft-delete a login (Detail screen). Distinct from deactivate: cascades
+# # is_active/is_valid='N' across every grant table (role, level, components),
+# # not just activity_member.is_acitve, so a later reactivate comes back with
+# # no stale grants rather than silently restoring the old access set.
+# @app.delete("/api/members/{member_id}")
+# def delete_member(member_id: int):
+#     member_row = run("SELECT tdp_cadre_id FROM activity_member WHERE activity_member_id=%s", (member_id,), one=True)
+#     if not member_row:
+#         raise HTTPException(status_code=404, detail="not found")
+#
+#     def _delete(cur):
+#         cur.execute("UPDATE activity_member SET is_acitve='N' WHERE activity_member_id=%s", (member_id,))
+#         cur.execute(
+#             "UPDATE activity_member_access_type SET is_active='N' WHERE activity_member_id=%s AND is_active='Y'",
+#             (member_id,),
+#         )
+#         cur.execute(
+#             "UPDATE activity_member_access_level SET is_active='N' WHERE activity_member_id=%s AND is_active='Y'",
+#             (member_id,),
+#         )
+#         cur.execute(
+#             "UPDATE activity_member_component SET is_valid='N' WHERE activity_member_id=%s AND is_valid='Y'",
+#             (member_id,),
+#         )
+#         if member_row["tdp_cadre_id"]:
+#             cur.execute(
+#                 "UPDATE login_otp_details SET is_valid='N', updated_time=NOW() "
+#                 "WHERE tdp_cadre_id=%s AND is_valid='Y'",
+#                 (member_row["tdp_cadre_id"],),
+#             )
+#
+#     run_write_tx(_delete)
+#     row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
+#     return shape(row)
+# --- END WRITE ACCESS BLOCK --------------------------------------------------
 
 
 if __name__ == "__main__":

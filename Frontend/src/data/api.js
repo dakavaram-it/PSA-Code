@@ -24,6 +24,14 @@ export const getComponents = () => fetch(`${BASE}/lookups/components`).then(json
 export const lookupCadre = (mid) =>
   fetch(`${BASE}/cadre/${encodeURIComponent(mid)}`).then((r) => (r.ok ? r.json() : null));
 
+// mobile_no isn't unique — returns every cadre sharing that number (possibly
+// []). Column names come straight from the admin's reference query (CADREID,
+// MEMBERNAME, MOBILENO, MID, IMAGE, AMID, LOCLEVEL, LOCVALUE, OTP, EXPDATE,
+// TEAMNAME) rather than this file's usual snake_case — AMID set means an
+// active login already exists (the query only joins is_acitve='Y' rows).
+export const lookupCadreByMobile = (mobile) =>
+  fetch(`${BASE}/cadre/by-mobile/${encodeURIComponent(mobile)}`).then(jsonOrThrow);
+
 // Writes the member's live role grant; returns the updated member row.
 export const updateMemberRole = (memberId, userTypeId) =>
   fetch(`${BASE}/members/${memberId}/role`, {
@@ -39,3 +47,31 @@ export const updateMemberActive = (memberId, isActive) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ is_active: isActive }),
   }).then(jsonOrThrow);
+
+// Writes the member's live geographic scope; returns the updated member row.
+export const updateMemberLevel = (memberId, userLevelId, locationValue) =>
+  fetch(`${BASE}/members/${memberId}/level`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_level_id: userLevelId, location_value: locationValue }),
+  }).then(jsonOrThrow);
+
+// Creates a login (+ role/level/component grants) for a cadre with no
+// activity_member row yet. Throws (status 409) if one already exists.
+export const createMember = (payload) =>
+  fetch(`${BASE}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tdp_cadre_id: payload.tdp_cadre_id,
+      user_type_id: payload.role_id,
+      user_level_id: payload.level_id,
+      location_value: payload.location_value,
+      component_ids: payload.components,
+    }),
+  }).then(jsonOrThrow);
+
+// Soft-deletes a login: cascades is_active/is_valid='N' across every grant
+// table, not just activity_member.is_acitve. Returns the now-deactivated row.
+export const deleteMember = (memberId) =>
+  fetch(`${BASE}/members/${memberId}`, { method: 'DELETE' }).then(jsonOrThrow);

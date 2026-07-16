@@ -265,15 +265,15 @@ export default function AdminConsole() {
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-amber-50 via-yellow-50 to-orange-100 font-sans text-gray-900">
       {/* SIDEBAR */}
-      <aside className="sticky top-0 flex h-screen w-60 flex-none flex-col border-r border-white/60 bg-white/70 py-5 backdrop-blur-xl">
+      <aside className="sticky top-0 flex h-screen w-60 flex-none flex-col border-r border-white/60 bg-black py-5 backdrop-blur-xl">
         <div className="flex items-center gap-3 px-5 pb-5">
-          <div className="grid h-10 w-10 flex-none place-items-center rounded-xl bg-gradient-to-br from-amber-600 to-orange-700 font-head text-lg font-bold text-white shadow-md">U</div>
+          <div className="grid h-10 w-10 flex-none place-items-center rounded-xl bg-gradient-to-br from-amber-600 to-yellow-700 font-head text-lg font-bold text-white shadow-md">U</div>
           <div className="leading-tight">
-            <div className="font-head text-[15px] font-bold tracking-tight">User</div>
+            <div className="font-head text-[15px] font-bold tracking-tight text-white">User</div>
             <div className="text-[9.5px] uppercase tracking-[0.16em] text-yellow-700">Admin Console</div>
           </div>
         </div>
-        <div className="px-5 py-1.5 text-[9.5px] uppercase tracking-[0.14em] text-gray-400">Manage</div>
+        <div className="px-5 py-1.5 text-[9.5px] uppercase tracking-[0.14em] text-gray/40">Manage</div>
         <nav className="flex flex-col gap-1 px-3">
           {NAV.map((it) => {
             const on = screen === it.key || (it.key === "users" && screen === "detail");
@@ -282,11 +282,11 @@ export default function AdminConsole() {
                 className={cn(
                   "flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm transition-all",
                   on
-                    ? "bg-yellow-100 font-semibold text-yellow-700 shadow-sm"
-                    : "font-medium text-gray-600 hover:bg-yellow-50",
+                    ? "bg-yellow-500 font-semibold"
+                    : "font-medium text-gray-600 ",
                 )}>
                 <span className="flex w-[18px] flex-none">{it.icon}</span>
-                <span className="flex-1">{it.label}</span>
+                <span className="flex-1 text-white">{it.label}</span>
                 {it.badge != null && (
                   <span className="rounded-full bg-yellow-200/70 px-2 py-0.5 text-[10px] font-semibold text-yellow-700">{it.badge}</span>
                 )}
@@ -296,7 +296,7 @@ export default function AdminConsole() {
         </nav>
         <div className="mt-auto px-4">
           <div className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white/70 p-3 shadow-sm">
-            <div className="grid h-9 w-9 flex-none place-items-center rounded-full bg-gradient-to-br from-amber-600 to-orange-700 font-head text-sm font-bold text-white">A</div>
+            <div className="grid h-9 w-9 flex-none place-items-center rounded-full bg-gradient-to-br from-amber-600 to-yellow-700 font-head text-sm font-bold text-white">A</div>
             <div className="leading-tight">
               <div className="text-sm font-semibold">ADMIN</div>
               <div className="text-[11px] text-gray-400">Administrator</div>
@@ -310,8 +310,8 @@ export default function AdminConsole() {
         {/* TOPBAR */}
         <header className="sticky top-0 z-10 flex items-center gap-4 border-b border-white/60 bg-white/50 px-6 py-4 backdrop-blur-xl">
           <div className="min-w-0 flex-1">
-            <div className="text-[10.5px] uppercase tracking-[0.12em] text-yellow-700">{CRUMB[screen]}</div>
-            <h1 className="font-head text-[22px] font-semibold leading-tight">{TITLE[screen]}</h1>
+            <div className="text-[22 px] uppercase tracking-[0.12em] text-yellow-700 font-bold">{TITLE[screen]} </div>
+            <h1 className="font-head text-[10.5px] font-semibold leading-tight">TDP User Management</h1>
           </div>
           <div className="flex items-center gap-3">
             <div className="hidden text-right leading-tight sm:block">

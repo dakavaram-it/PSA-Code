@@ -5,7 +5,7 @@ import {
   AlertTriangle, UserCheck, UserX, FolderTree, Save, RotateCcw, Copy, UserPlus,
   IdCard, Smartphone,
 } from "lucide-react";
-import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre, updateMemberRole, updateMemberActive } from "./data/api.js";
+import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre, lookupCadreByMobile, updateMemberRole, updateMemberActive } from "./data/api.js";
 import { cn } from "./lib/utils.js";
 
 /*
@@ -71,6 +71,10 @@ function effectiveComponents(member, groups) {
 // --- OTP: client-side 6-digit generator, mock only. -------------------------
 const generateOtp = () => String(Math.floor(100000 + Math.random() * 900000));
 
+// Client-side 8-digit placeholder MID for the "not found" manual-entry path —
+// cosmetic only, never checked against tdp_cadre.membership_id.
+const generatePlaceholderMid = () => String(Math.floor(10000000 + Math.random() * 90000000));
+
 const CONSTITUENCIES = ["Tirupati", "Mangalagiri", "Guntur East", "Rajahmundry City", "Visakhapatnam North", "Kurnool", "Kadapa", "Anantapur Urban", "Nellore City", "Kakinada City", "Eluru", "Ongole", "Chittoor", "Machilipatnam"];
 const PARLIAMENTS = ["Tirupati", "Guntur", "Rajahmundry", "Visakhapatnam", "Kurnool", "Nellore", "Anantapur"];
 
@@ -129,6 +133,7 @@ export default function AdminConsole() {
   const [loadError, setLoadError] = useState(null);
   const [groups, setGroups] = useState(INITIAL_GROUPS);
   const [activeId, setActiveId] = useState(null);
+  const [returnScreen, setReturnScreen] = useState("users"); // where Detail's Back button should go
   const [activeGroupId, setActiveGroupId] = useState(null);
   const [filters, setFilters] = useState({ q: "", status: "all", role: "all", level: "all" });
   const [selected, setSelected] = useState(() => new Set());
@@ -180,7 +185,7 @@ export default function AdminConsole() {
     flash(`Changes saved for ${edited.member_name}`);
   }
   function openOtp(m) { setOtpModal({ member: m, code: generateOtp() }); }
-  function openDetail(id) { setActiveId(id); setScreen("detail"); }
+  function openDetail(id ,from = screen) { setActiveId(id); setReturnScreen(from); setScreen("detail"); }
   // The only two writes in this app that hit the real DB (Backend/main.py's
   // two PUT endpoints) — everything else here is client-side mock state.
   async function changeMemberRole(id, role) {
@@ -295,11 +300,11 @@ export default function AdminConsole() {
           })}
         </nav>
         <div className="mt-auto px-4">
-          <div className="flex items-center gap-3 rounded-xl border border-gray-100 bg-white/70 p-3 shadow-sm">
+          <div className="flex items-center gap-3 rounded-xl  ">
             <div className="grid h-9 w-9 flex-none place-items-center rounded-full bg-gradient-to-br from-amber-600 to-yellow-700 font-head text-sm font-bold text-white">A</div>
             <div className="leading-tight">
-              <div className="text-sm font-semibold">ADMIN</div>
-              <div className="text-[11px] text-gray-400">Administrator</div>
+              <div className="text-sm font-semibold text-gray-400">ADMIN</div>
+              {/* <div className="text-[11px] text-gray-400">Administrator</div> */}
             </div>
           </div>
         </div>
@@ -330,17 +335,19 @@ export default function AdminConsole() {
               onCreate={() => setScreen("create")}
               onViewActive={() => { setFilters((f) => ({ ...f, status: "active" })); setScreen("users"); }}
               onViewInactive={() => { setFilters((f) => ({ ...f, status: "inactive" })); setScreen("users"); }}
-              onOpenMember={openDetail}
+              onOpenMember={(id) => openDetail(id, "dashboard")}
             />
           )}
           {screen === "users" && (
             <UsersScreen rows={filtered} total={members.length} filters={filters} setFilters={setFilters}
-              selected={selected} setSelected={setSelected} bulkSet={bulkSet} onOpen={openDetail}
+              selected={selected} setSelected={setSelected} bulkSet={bulkSet} onOpen={(id) => openDetail(id, "users")}
               onReset={openOtp} onBack={() => setScreen("dashboard")} />
           )}
           {screen === "detail" && activeUser && (
             <DetailScreen key={activeUser.activity_member_id} u={activeUser} groups={groups}
-              onBack={() => setScreen("users")} onSave={saveMember} onReset={() => openOtp(activeUser)} />
+              // onBack={() => setScreen("users")} onSave={saveMember} onReset={() => openOtp(activeUser)} />
+              onBack={() => setScreen(returnScreen)} onSave={saveMember} onReset={() => openOtp(activeUser)}
+             backLabel={returnScreen === "dashboard" ? "Back to dashboard" : "Back to logins"} />
           )}
           {screen === "groups" && (
             <GroupsScreen groups={groups} members={members} activeGroupId={activeGroupId}
@@ -705,7 +712,7 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
 }
 
 // --- DETAIL (draft + Save) --------------------------------------------------
-function DetailScreen({ u, groups, onBack, onSave, onReset }) {
+function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to logins"}) {
   const [draft, setDraft] = useState(u);
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
@@ -1077,6 +1084,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
   const [pendingLocation, setPendingLocation] = useState("");
   const [savingRole, setSavingRole] = useState(false);
   const [savingActive, setSavingActive] = useState(false);
+  const [mobileCandidates, setMobileCandidates] = useState([]);
   const lookedUpRef = useRef("");
 
   const locList = levelId === 5 ? CONSTITUENCIES : levelId === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
@@ -1085,7 +1093,43 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
   const inheritedIds = new Set(grp ? grp.component_ids : []);
 
   function switchMode(mode) {
-    setLookupMode(mode); setErr(""); lookedUpRef.current = "";
+    setLookupMode(mode); setErr(""); setMobileCandidates([]); lookedUpRef.current = "";
+  }
+
+  // A found cadre already has a login (AMID set — the by-mobile query only
+  // joins active logins, so AMID present always means an active one) → open
+  // the existing-login panel. Otherwise the by-mobile query only returns a
+  // display subset (no gender/constituency_id/last_name), so re-fetch the
+  // full cadre record by its MID to give step 2 the same shape the
+  // MID-search path already produces. c.IMAGE carries the photo either way,
+  // as a fallback if the re-fetch doesn't turn one up.
+  async function selectMobileCandidate(c) {
+    if (c.AMID) {
+      const existing = members.find((m) => m.activity_member_id === c.AMID);
+      setExistingMember(existing || {
+        activity_member_id: c.AMID, member_name: c.MEMBERNAME,
+        membership_id: c.MID, mobile_no: c.MOBILENO, is_acitve: "Y",
+        role_name: c.TEAMNAME, level_name: c.LOCLEVEL, location_value: c.LOCVALUE, image_url: c.IMAGE,
+      });
+      setCadre(null); setNotFound(false);
+      setStep(2);
+      return;
+    }
+
+    const rawMid = c.MID ? c.MID.replace(/^#/, "") : "";
+    setLooking(true);
+    const full = rawMid ? await lookupCadre(rawMid) : null;
+    setLooking(false);
+    const found = full || {
+      tdp_cadre_id: c.CADREID, membership_id: rawMid || null,
+      first_name: c.MEMBERNAME, last_name: "", mobile_no: c.MOBILENO,
+      gender: null, constituency_id: null, image_url: c.IMAGE,
+    };
+    if (!found.image_url) found.image_url = c.IMAGE;
+    setCadre(found); setNotFound(false);
+    setName(`${found.first_name || ""} ${found.last_name || ""}`.trim());
+    setMobile(found.mobile_no || "");
+    setStep(2);
   }
 
   async function doLookup(modeArg, valueArg) {
@@ -1094,43 +1138,61 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
     const q = raw.trim();
     setErr("");
     if (!q) return setErr(mode === "mid" ? "Enter a membership ID first." : "Enter a mobile number first.");
+    if (mode === "mid" && q.length !== 8) return setErr("Incorrect Membership ID — it must be 8 digits.");
 
-    // Existing logins are already loaded client-side (~1.4k rows) — cheap to check
-    // against either field before touching the backend. membership_id comes back
-    // "#12345678" from the backend, so strip the "#" before comparing to the raw digits typed.
-    const existing = mode === "mid"
-      ? members.find((m) => (m.membership_id || "").replace(/^#/, "") === q)
-      : members.find((m) => m.mobile_no === q);
-    if (existing) {
-      setExistingMember(existing); setCadre(null); setNotFound(false);
+    if (mode === "mid") {
+      // Existing logins are already loaded client-side (~1.4k rows) — cheap to check
+      // before touching the backend. membership_id comes back "#12345678" from the
+      // backend, so strip the "#" before comparing to the raw digits typed.
+      const existing = members.find((m) => (m.membership_id || "").replace(/^#/, "") === q);
+      if (existing) {
+        setExistingMember(existing); setCadre(null); setNotFound(false);
+        setStep(2);
+        return;
+      }
+      setLooking(true);
+      const found = await lookupCadre(q);
+      setLooking(false);
+      if (found) {
+        setCadre(found); setNotFound(false);
+        setName(`${found.first_name || ""} ${found.last_name || ""}`.trim());
+        setMobile(found.mobile_no || "");
+      } else {
+        setCadre(null); setNotFound(true); setName(""); setMobile("");
+      }
       setStep(2);
       return;
     }
 
-    if (mode === "mobile") {
-      // tdp_cadre is 22.5M rows and is only ever point-looked-up by membership_id
-      // (Backend.md) — there's no safe indexed way to resolve a bare mobile
-      // number to a cadre record, so we fall straight to manual entry.
-      setCadre(null); setNotFound(true); setName(""); setMobile(q);
-      setStep(2);
-      return;
-    }
-
+    // mobile_no isn't unique — pull every cadre sharing this number (some may
+    // already have a login, some not) so nothing is silently hidden behind a
+    // single match.
     setLooking(true);
-    const found = await lookupCadre(q);
-    setLooking(false);
-    if (found) {
-      setCadre(found); setNotFound(false);
-      setName(`${found.first_name || ""} ${found.last_name || ""}`.trim());
-      setMobile(found.mobile_no || "");
-    } else {
-      setCadre(null); setNotFound(true); setName(""); setMobile("");
+    let candidates;
+    try {
+      candidates = await lookupCadreByMobile(q);
+    } catch {
+      setLooking(false);
+      setErr("Could not look up that mobile number — check the backend is reachable and try again.");
+      return;
     }
-    setStep(2);
+    setLooking(false);
+    if (candidates.length === 0) {
+      setCadre(null); setNotFound(true); setName(""); setMobile(q); setMobileCandidates([]);
+      setStep(2);
+      return;
+    }
+    if (candidates.length === 1) {
+      selectMobileCandidate(candidates[0]);
+      return;
+    }
+    setMobileCandidates(candidates);
   }
 
   // Auto-lookup once a full membership ID (8 digits) or mobile number (10 digits) is typed.
   // The explicit "Look up cadre" button covers the same action for anyone who doesn't want to wait.
+  // A membership ID that stops one digit short (7) gets an immediate "incorrect"
+  // hint instead of silently doing nothing, since 7 is the easiest typo to make.
   useEffect(() => {
     if (step !== 1 || !lookupMode) return;
     const q = (lookupMode === "mid" ? mid : lookupMobile).trim();
@@ -1138,11 +1200,14 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
     if (q.length === targetLen && q !== lookedUpRef.current) {
       lookedUpRef.current = q;
       doLookup(lookupMode, q);
+    } else if (lookupMode === "mid" && q.length === 7 && q !== lookedUpRef.current) {
+      lookedUpRef.current = q;
+      setErr("Incorrect Membership ID — it must be 8 digits.");
     }
   }, [mid, lookupMobile, lookupMode, step]);
 
   function resetLookup() {
-    setExistingMember(null); setCadre(null); setNotFound(false);
+    setExistingMember(null); setCadre(null); setNotFound(false); setMobileCandidates([]);
     setMid(""); setLookupMobile(""); setName(""); setMobile("");
     setRoleMenuOpen(false); setLocationMenuOpen(false); setErr("");
     lookedUpRef.current = ""; setStep(1); setLookupMode(null);
@@ -1221,11 +1286,23 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
     </div>
   );
 
+  // A mobile search that turned up more than one person left mobileCandidates
+  // populated; once you've drilled into one of them (existingMember panel, or
+  // step 2+ of the wizard with a cadre picked from that list), the top-left
+  // back link should return you to that picker instead of leaving the create
+  // flow entirely. At step 1 with the picker already on screen, it still just
+  // exits — there's nothing to "go back to" yet.
+  const showBackToResults = mobileCandidates.length > 0 && (!!existingMember || step > 1);
+  function backToResults() {
+    setExistingMember(null);
+    setStep(1);
+  }
+
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
-          <ChevronLeft size={16} /> Back to logins
+        <button onClick={showBackToResults ? backToResults : onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
+          <ChevronLeft size={16} /> {showBackToResults ? "Back to results" : "Back to logins"}
         </button>
       </div>
 
@@ -1350,9 +1427,29 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                       ? "Looking up…"
                       : lookupMode === "mid"
                         ? <>Type a member's 8-digit Membership ID, or click "Look up cadre" below. Try <strong>19457249</strong> for a match; an unknown ID lets you enter the details manually.</>
-                        : <>Type a 10-digit mobile number, or click "Look up cadre" below — this checks existing logins. Cadre records can only be pulled by Membership ID, not mobile.</>}
+                        : <>Type a 10-digit mobile number, or click "Look up cadre" below. A mobile number isn't unique — if more than one member shares it, you'll get to pick which one.</>}
                   </div>
                   {err && <ErrLine>{err}</ErrLine>}
+
+                  {mobileCandidates.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <div className="text-xs text-gray-500">{mobileCandidates.length} members share this mobile number — pick one:</div>
+                      <div className="overflow-hidden rounded-xl border border-gray-200">
+                        {mobileCandidates.map((c) => (
+                          <button key={c.CADREID} type="button" onClick={() => selectMobileCandidate(c)}
+                            className="flex w-full items-center justify-between gap-3 border-b border-gray-100 px-3.5 py-2.5 text-left last:border-b-0 hover:bg-yellow-50">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium text-gray-800">{c.MEMBERNAME || NO_NAME}</div>
+                              <div className="text-[11px] text-gray-400">MID {c.MID || "— none —"} · cadre #{c.CADREID}</div>
+                            </div>
+                            {c.AMID
+                              ? <span className="flex-none rounded-full bg-yellow-100 px-2.5 py-0.5 text-[11px] font-medium text-yellow-700">Has login · {c.TEAMNAME || "no role"}</span>
+                              : <span className="flex-none rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-medium text-gray-500">No login yet</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </>
@@ -1363,19 +1460,21 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
               {cadre ? (
                 <Card className="border-l-4 border-l-green-400 p-6">
                   <div className="mb-3 flex items-center gap-2 text-[12.5px] text-green-600"><UserCheck size={15} /> Member found — cadre #{cadre.tdp_cadre_id}</div>
-                  <div className="flex flex-wrap gap-x-8 gap-y-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
+                    <Avatar name={`${cadre.first_name || ""} ${cadre.last_name || ""}`.trim()} imageUrl={cadre.image_url} className="h-12 w-12 rounded-full bg-gradient-to-br from-amber-600 to-orange-700" textClassName="font-head text-sm font-bold text-white" />
                     <HKV k="Name" v={`${cadre.first_name} ${cadre.last_name || ""}`.trim()} />
                     <HKV k="Mobile" v={cadre.mobile_no} />
                     <HKV k="Gender" v={cadre.gender || "—"} />
                     <HKV k="Constituency ID" v={cadre.constituency_id ?? "—"} />
-                    <HKV k="Payment" v={cadre.payment_status} />
                   </div>
                 </Card>
               ) : (
                 <Card className="border-l-4 border-l-amber-400 p-6">
                   <div className="flex items-center gap-2 text-[12.5px] text-amber-600">
                     <AlertTriangle size={15} />
-                    {lookupMode === "mid" ? `No cadre found for MID ${mid}.` : `No existing login or cadre match for mobile ${lookupMobile}.`} Enter the details manually — this login won't resolve to a cadre record unless you supply a valid Membership ID.
+                    {lookupMode === "mid"
+                      ? `Membership ID ${mid} not found.`
+                      : `No existing login or cadre match for mobile ${lookupMobile}.`} You can create a new login by entering the details manually below — it just won't resolve to a cadre record unless you supply a valid Membership ID.
                   </div>
                 </Card>
               )}
@@ -1386,7 +1485,11 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                   <input value={mobile} onChange={(e) => setMobile(e.target.value)} className={INPUT} placeholder="9xxxxxxxxx" /></label>
                 {!cadre && (
                   <label className="flex flex-col gap-1.5"><span className={LABEL}>Membership ID (optional)</span>
-                    <input value={mid} onChange={(e) => setMid(e.target.value)} className={INPUT} placeholder="If known" /></label>
+                    <div className="flex gap-2">
+                      <input value={mid} onChange={(e) => setMid(e.target.value)} className={cn(INPUT, "flex-1")} placeholder="If known" />
+                      <button type="button" onClick={() => setMid(generatePlaceholderMid())} className={cn(SECONDARY, "whitespace-nowrap px-3")}>Generate MID</button>
+                    </div>
+                  </label>
                 )}
               </div>
               {err && <ErrLine>{err}</ErrLine>}

@@ -244,9 +244,9 @@ def components():
 @app.get("/api/cadre/{mid}")
 def cadre(mid: str):
     row = run(
-        "SELECT tdp_cadre_id, membership_id, first_name, last_name, mobile_no, "
-        "gender, constituency_id, payment_status "
-        "FROM tdp_cadre WHERE membership_id = %s AND is_deleted = 'N' LIMIT 1",
+        f"SELECT tdp_cadre_id, membership_id, first_name, last_name, mobile_no, "
+        f"gender, constituency_id, CONCAT('{CADRE_IMAGE_BASE}', image) AS image_url "
+        f"FROM tdp_cadre WHERE membership_id = %s AND is_deleted = 'N' LIMIT 1",
         (mid,), one=True,
     )
     if not row:

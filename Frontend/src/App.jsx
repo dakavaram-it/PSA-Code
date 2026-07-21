@@ -1669,16 +1669,11 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
         </div>
 
         <div className="mt-5 flex justify-between gap-2.5 border-t border-gray-100 pt-4">
-<<<<<<< Updated upstream
-          {/* <button onClick={step === 1 ? onBack : () => setStep(step - 1)} className={SECONDARY}>{step === 1 ? "Cancel" : "Back"}</button> */
           <button
-            onClick={step === 1 ? onBack : () => setStep(step - 1)}
+            onClick={step === 1 ? backFromStep1 : () => { if (step === 2 && lookupMode === "manual") setLookupMode(null); setStep(step - 1); }}
             className={step === 1 ? "bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-md" : SECONDARY}>
-            {step === 1 ? "Cancel" : "Back"}
-            </button>}
-=======
-          <button onClick={step === 1 ? backFromStep1 : () => { if (step === 2 && lookupMode === "manual") setLookupMode(null); setStep(step - 1); }} className={SECONDARY}>{step === 1 ? (atStep1Options ? "Back" : "Cancel") : "Back"}</button>
->>>>>>> Stashed changes
+            {step === 1 ? (atStep1Options ? "Back" : "Cancel") : "Back"}
+          </button>
           {step === 1 && lookupMode && <button onClick={() => doLookup()} disabled={looking} className={PRIMARY}>{looking ? "Looking up…" : "Look up cadre"}</button>}
           {step === 2 && <button onClick={() => { if (!name.trim()) return setErr("Name is required."); setErr(""); setStep(3); }} className={PRIMARY}>Next: access</button>}
           {step === 3 && <button onClick={submit} className={PRIMARY}>Create &amp; generate OTP</button>}

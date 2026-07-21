@@ -1,4 +1,4 @@
-# User Admin Console
+cler# User Admin Console
 
 React admin console for the `activity_member` login system, backed by a **read-only**
 API over the live `dakavara_pa` database. The table, overview stats, detail view, audit

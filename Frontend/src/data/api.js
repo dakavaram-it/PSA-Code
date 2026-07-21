@@ -26,9 +26,13 @@ export const lookupCadre = (mid) =>
 
 // mobile_no isn't unique — returns every cadre sharing that number (possibly
 // []). Column names come straight from the admin's reference query (CADREID,
-// MEMBERNAME, MOBILENO, MID, IMAGE, AMID, LOCLEVEL, LOCVALUE, OTP, EXPDATE,
-// TEAMNAME) rather than this file's usual snake_case — AMID set means an
-// active login already exists (the query only joins is_acitve='Y' rows).
+// MEMBERNAME, MOBILENO, MID, IMAGE, AMID, LOCLEVEL, LOCVALUE, LOCATION, OTP,
+// EXPDATE, TEAMNAME) rather than this file's usual snake_case — AMID set
+// means an active login already exists (the query only joins is_acitve='Y'
+// rows). LOCATION resolves LOCVALUE's untyped int to a name: 'AP' for level
+// 2, else the matching constituency.name for level 4/5 (empty string
+// otherwise — LOCVALUE has no mapping at level 2, and other levels aren't
+// resolved by this query).
 export const lookupCadreByMobile = (mobile) =>
   fetch(`${BASE}/cadre/by-mobile/${encodeURIComponent(mobile)}`).then(jsonOrThrow);
 

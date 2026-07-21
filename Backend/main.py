@@ -107,6 +107,11 @@ def shape(r):
 CADRE_IMAGE_BASE = "https://imagesearch-projectkv.s3.amazonaws.com/cadre_images/"
 
 # One row per login. Collapses the member×role×component fan-out in SQL. [Backend.md §5.1]
+# location_name resolves location_value (untyped int) to a human name, same CASE logic as
+# CADRE_BY_MOBILE_SELECT below: 'AP' for level 2 (state-wide), else the matching
+# constituency.name for level 4/5 (empty string otherwise). Wrapped in MAX() like the other
+# aggregated fields since this is a GROUP BY query — safe because a login has at most one
+# active access_level grant, same assumption role_name/level_name already rely on.
 MEMBER_SELECT = f"""
   SELECT AM.activity_member_id, AM.member_name, AM.tdp_cadre_id, AM.inserted_time,
          AM.updated_by, AM.is_acitve, TC.membership_id, TC.mobile_no,
@@ -114,6 +119,9 @@ MEMBER_SELECT = f"""
          MAX(AMAT.user_type_id) AS role_id, MAX(UT.type) AS role_name, MAX(UT.short_name) AS role_short,
          MAX(AMAL.activity_member_level_id) AS level_id, MAX(UL.level) AS level_name,
          MAX(AMAL.activity_location_value) AS location_value,
+         MAX(CASE WHEN AMAL.activity_member_level_id = 2 THEN 'AP'
+                  WHEN AMAL.activity_member_level_id = 4 THEN PC.name
+                  WHEN AMAL.activity_member_level_id = 5 THEN AC.name ELSE '' END) AS location_name,
          GROUP_CONCAT(DISTINCT AMC.component_id ORDER BY AMC.component_id) AS component_ids
   FROM activity_member AM
   LEFT JOIN tdp_cadre TC ON TC.tdp_cadre_id = AM.tdp_cadre_id
@@ -121,6 +129,8 @@ MEMBER_SELECT = f"""
   LEFT JOIN user_type UT ON UT.user_type_id = AMAT.user_type_id
   LEFT JOIN activity_member_access_level AMAL ON AMAL.activity_member_id = AM.activity_member_id AND AMAL.is_active='Y'
   LEFT JOIN user_level UL ON UL.user_level_id = AMAL.activity_member_level_id
+  LEFT JOIN constituency PC ON AMAL.activity_location_value = PC.constituency_id AND AMAL.activity_member_level_id = 4
+  LEFT JOIN constituency AC ON AMAL.activity_location_value = AC.constituency_id AND AMAL.activity_member_level_id = 5
   LEFT JOIN activity_member_component AMC ON AMC.activity_member_id = AM.activity_member_id AND AMC.is_valid='Y'
 """
 GROUP_BY = """ GROUP BY AM.activity_member_id, AM.member_name, AM.tdp_cadre_id,
@@ -172,11 +182,20 @@ MEMBERS_QUERY = f"""
     AM.member_name, TC.mobile_no, AM.is_acitve, AM.inserted_time, AM.updated_by,
     CONCAT("{CADRE_IMAGE_BASE}", TC.image) AS image_url,
     UT.user_type_id AS role_id, UT.type AS role_name,
+    AMAL.activity_member_level_id AS level_id, UL.level AS level_name,
+    AMAL.activity_location_value AS location_value,
+    CASE WHEN AMAL.activity_member_level_id = 2 THEN 'AP'
+         WHEN AMAL.activity_member_level_id = 4 THEN PC.name
+         WHEN AMAL.activity_member_level_id = 5 THEN AC.name ELSE '' END AS location_name,
     AMC.component_id, C.actual_name
   FROM activity_member AM
   LEFT JOIN tdp_cadre TC ON AM.tdp_cadre_id = TC.tdp_cadre_id
   LEFT JOIN activity_member_access_type AMAT ON AMAT.activity_member_id = AM.activity_member_id AND AMAT.is_active = 'Y'
   LEFT JOIN user_type UT ON UT.user_type_id = AMAT.user_type_id
+  LEFT JOIN activity_member_access_level AMAL ON AMAL.activity_member_id = AM.activity_member_id AND AMAL.is_active = 'Y'
+  LEFT JOIN user_level UL ON UL.user_level_id = AMAL.activity_member_level_id
+  LEFT JOIN constituency PC ON AMAL.activity_location_value = PC.constituency_id AND AMAL.activity_member_level_id = 4
+  LEFT JOIN constituency AC ON AMAL.activity_location_value = AC.constituency_id AND AMAL.activity_member_level_id = 5
   LEFT JOIN activity_member_component AMC ON AMC.activity_member_id = AM.activity_member_id AND AMC.is_valid = 'Y'
   LEFT JOIN component C ON C.component_id = AMC.component_id
   ORDER BY AM.activity_member_id, C.component_id
@@ -193,6 +212,7 @@ def rollup_members(rows):
             m = {k: r[k] for k in (
                 "activity_member_id", "tdp_cadre_id", "membership_id", "member_name",
                 "mobile_no", "is_acitve", "inserted_time", "updated_by", "image_url", "role_id", "role_name",
+                "level_id", "level_name", "location_value", "location_name",
             )}
             m["component_ids"] = []
             by_id[mid] = m
@@ -257,10 +277,15 @@ def cadre(mid: str):
 # 4b) cadre lookup by mobile number (create-flow step 1, read-only).
 # mobile_no is indexed but NOT unique — multiple cadre (e.g. family members
 # sharing one phone) can share a number, so this returns every match
-# (possibly []). This is the admin's reference lookup query verbatim (column
-# aliases kept as given, unlike the rest of this file's snake_case, so the
-# response is recognisable against the source query) with two things worth
-# knowing:
+# (possibly []). Column aliases are kept as given by the admin's reference
+# queries (not this file's usual snake_case) so the response stays
+# recognisable against the source SQL. Base FROM/LEFT JOIN shape (starting at
+# tdp_cadre, not activity_member) and the mobile_no filter are preserved from
+# the original version of this query on purpose — see the two gotchas below —
+# with LOCATION folded in from a second reference query that otherwise
+# INNER JOINed from activity_member and had no mobile_no filter at all, which
+# would have dropped the "cadre has no login yet" case this endpoint exists
+# for. Things worth knowing:
 #   - AM only joins on is_acitve='Y', so a *deactivated* login reads
 #     identical to "no login yet" here (AMID/LOCLEVEL/TEAMNAME all null) —
 #     unlike create_member's duplicate check below, which still counts a
@@ -268,6 +293,11 @@ def cadre(mid: str):
 #     create a second one.
 #   - No GROUP BY: a cadre with more than one active role or access-level
 #     grant at once (rare in this data) fans out into multiple rows.
+#   - LOCATION resolves LOCVALUE (an untyped int) to a human name: 'AP' for
+#     level 2 (state-wide), else a LEFT JOIN to `constituency` keyed off
+#     activity_location_value for level 4/5, empty string for anything else.
+#     PC/AC are two separate joins to the same table (one per level) so the
+#     CASE can pick the right one without ambiguity.
 # is_deleted='N' was added (not in the source query) so a deleted cadre
 # record can't show up here and then 404 when picked for creation.
 CADRE_BY_MOBILE_SELECT = f"""
@@ -280,13 +310,18 @@ CADRE_BY_MOBILE_SELECT = f"""
       AM.activity_member_id AS AMID,
       UL.level AS LOCLEVEL,
       AMAL.activity_location_value AS LOCVALUE,
+      CASE WHEN AMAL.activity_member_level_id = 2 THEN 'AP'
+           WHEN AMAL.activity_member_level_id = 4 THEN PC.name
+           WHEN AMAL.activity_member_level_id = 5 THEN AC.name ELSE '' END AS LOCATION,
       CONCAT('#', LOD.otp) AS OTP,
       CONCAT('#', DATE(LOD.generated_time)) AS EXPDATE,
       UT.short_name AS TEAMNAME
   FROM tdp_cadre CR
   LEFT JOIN activity_member AM ON CR.tdp_cadre_id = AM.tdp_cadre_id AND AM.is_acitve = 'Y' AND AM.activity_member_id <> 581
-  LEFT JOIN activity_member_access_level AMAL ON AM.activity_member_id = AMAL.activity_member_id
+  LEFT JOIN activity_member_access_level AMAL ON AM.activity_member_id = AMAL.activity_member_id AND AMAL.is_active = 'Y'
   LEFT JOIN user_level UL ON AMAL.activity_member_level_id = UL.user_level_id
+  LEFT JOIN constituency PC ON AMAL.activity_location_value = PC.constituency_id AND AMAL.activity_member_level_id = 4
+  LEFT JOIN constituency AC ON AMAL.activity_location_value = AC.constituency_id AND AMAL.activity_member_level_id = 5
   LEFT JOIN activity_member_access_type AMAT ON AM.activity_member_id = AMAT.activity_member_id AND AMAT.is_active = 'Y'
   LEFT JOIN user_type UT ON AMAT.user_type_id = UT.user_type_id
   LEFT JOIN login_otp_details LOD ON CR.tdp_cadre_id = LOD.tdp_cadre_id AND LOD.is_valid = 'Y'

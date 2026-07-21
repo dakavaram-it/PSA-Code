@@ -7,7 +7,9 @@
       "Bash(curl -s -o /dev/null -w \"5174: %{http_code}\\\\n\" http://localhost:5174/)",
       "Bash(chromium-cli --help)",
       "Bash(node -e \"require.resolve\\('playwright'\\)\")",
-      "Bash(npx --no-install playwright --version)"
+      "Bash(npx --no-install playwright --version)",
+      "Bash(taskkill //PID 14884 //F)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)"
     ]
   }
 }

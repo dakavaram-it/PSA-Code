@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, ClipboardList, Search, Plus,
   ChevronLeft, Eye, KeyRound, X, Check, ShieldCheck, MapPin, Layers,
   AlertTriangle, UserCheck, UserX, FolderTree, Save, RotateCcw, Copy, UserPlus,
-  IdCard, Smartphone,
+  IdCard, Smartphone, Pencil,
 } from "lucide-react";
 import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre, lookupCadreByMobile, updateMemberRole, updateMemberActive } from "./data/api.js";
 import { cn } from "./lib/utils.js";
@@ -378,15 +378,37 @@ function Card({ children, className, onClick }) {
 // Cadre photo when we have one and it loads; falls back to initials otherwise
 // (no photo on file, or the S3 URL 404s/errors). `className` carries sizing +
 // rounding + the fallback background/gradient; `textClassName` styles the initials.
-function Avatar({ name, imageUrl, className, textClassName }) {
+
+function Avatar({ name, imageUrl, className, textClassName, zoomable = false }) {
   const [failed, setFailed] = useState(false);
+  const [zoomed, setZoomed] = useState(false);
+  const canZoom = zoomable && imageUrl && !failed;
   return (
-    <div className={cn("relative grid flex-none place-items-center overflow-hidden", className)}>
-      <span className={textClassName}>{initials(name)}</span>
-      {imageUrl && !failed && (
-        <img src={imageUrl} alt="" onError={() => setFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
+    <>
+      <div
+        className={cn("relative grid flex-none place-items-center overflow-hidden", className, canZoom && "cursor-zoom-in")}
+        onClick={canZoom ? () => setZoomed(true) : undefined}
+        title={canZoom ? "Click to view photo" : undefined}
+      >
+        <span className={textClassName}>{initials(name)}</span>
+        {imageUrl && !failed && (
+          <img src={imageUrl} alt="" onError={() => setFailed(true)} className="absolute inset-0 h-full w-full object-cover" />
+        )}
+      </div>
+      {zoomed && (
+        <div onClick={() => setZoomed(false)} className="fixed inset-0 z-50 grid place-items-center bg-gray-900/80 p-6 backdrop-blur-sm">
+          <button onClick={() => setZoomed(false)} className="absolute right-5 top-5 rounded-full bg-white/10 p-2 text-white transition-colors hover:bg-white/20">
+            <X size={20} />
+          </button>
+          <img
+            src={imageUrl}
+            alt={name || ""}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[85vh] max-w-[85vw] rounded-2xl object-contain shadow-2xl"
+          />
+        </div>
       )}
-    </div>
+    </>
   );
 }
 function SectionTitle({ icon, children }) {
@@ -450,6 +472,7 @@ function Ring({ pct, size = 88, stroke = 9 }) {
 // --- OVERVIEW ---------------------------------------------------------------
 function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOpenMember }) {
   const [expandedRole, setExpandedRole] = useState(null);
+  const [componentsRole, setComponentsRole] = useState(null);
   const kpis = [
     { label: "Total Users", value: stats.total, icon: <Users size={20} />, note: "All login accounts", cat: "blue" },
     { label: "Active Users", value: stats.active, icon: <UserCheck size={20} />, note: "Can sign in", cat: "green", onClick: onViewActive },
@@ -458,6 +481,14 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
   const roleRows = Object.entries(stats.roleCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const maxComp = Math.max(1, ...stats.topComponents.map((c) => c.count));
   const roleMembers = expandedRole ? members.filter((m) => m.is_acitve === "Y" && m.role_name === expandedRole) : [];
+  const componentsRoleMembers = componentsRole ? members.filter((m) => m.is_acitve === "Y" && m.role_name === componentsRole) : [];
+  const componentsRoleStats = (() => {
+    const counts = {};
+    componentsRoleMembers.forEach((m) => m.component_ids.forEach((id) => { counts[id] = (counts[id] || 0) + 1; }));
+    return Object.entries(counts)
+      .map(([id, count]) => { const c = COMPONENTS.find((x) => x.id === +id); return { id: +id, label: c ? componentLabel(c) : `#${id}`, count }; })
+      .sort((a, b) => b.count - a.count);
+  })();
 
   return (
     <div className="flex flex-col gap-5">
@@ -515,6 +546,10 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
                     className={cn("flex-none rounded-lg p-1.5 transition-colors", open ? "bg-yellow-100 text-yellow-600" : "text-gray-400 hover:bg-yellow-50 hover:text-yellow-600")}>
                     <Eye size={14} />
                   </button>
+                  <button onClick={() => setComponentsRole(role)} title={`View ${role} components`}
+                    className={cn("flex-none rounded-lg p-1.5 transition-colors", componentsRole === role ? "bg-orange-100 text-orange-600" : "text-gray-400 hover:bg-orange-50 hover:text-orange-600")}>
+                    <Layers size={14} />
+                  </button>
                 </div>
               );
             })}
@@ -568,7 +603,7 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
                     </td>
                     <td className={cn("px-2 py-2.5", m.mobile_no ? "" : "text-amber-600")}>{m.mobile_no || "missing"}</td>
                     <td className="px-2 py-2.5">{m.role_name ? <RoleBadge label={m.role_name} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
-                    <td className="px-2 py-2.5 text-xs text-gray-500">{m.level_name ? `${m.level_name} · ${m.location_value}` : "—"}</td>
+                    <td className="px-2 py-2.5 text-xs text-gray-500">{m.level_name ? `${m.level_name}${m.location_name ? ` · ${m.location_name}` : m.location_value ? ` · ${m.location_value}` : ""}` : "—"}</td>
                     <td className="px-2 py-2.5"><StatusPill active={m.is_acitve === "Y"} /></td>
                     <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{fmtDate(m.inserted_time)}</td>
                     <td className="whitespace-nowrap px-4 py-2 text-right">
@@ -602,6 +637,45 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
           </div>
         </div>
       </Card>*/}
+
+      {componentsRole && (
+        <RoleComponentsModal
+          role={componentsRole}
+          components={componentsRoleStats}
+          total={componentsRoleMembers.length}
+          onClose={() => setComponentsRole(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function RoleComponentsModal({ role, components, total, onClose }) {
+  return (
+    <div onClick={onClose} className="fixed inset-0 z-40 grid place-items-center bg-gray-900/50 p-5 backdrop-blur-sm">
+      <div onClick={(e) => e.stopPropagation()} className="w-[min(420px,100%)] animate-fade-in-up overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div>
+            <h3 className="font-head text-base font-semibold">{role} — components</h3>
+            <p className="mt-0.5 text-[11px] text-gray-400">Granted across {total} active login{total === 1 ? "" : "s"}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+        </div>
+        <div className="max-h-[360px] overflow-auto p-5">
+          {components.length === 0 && <div className="py-6 text-center text-sm text-gray-400">No components granted.</div>}
+          <div className="flex flex-col gap-2.5">
+            {components.map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-3 rounded-xl border border-gray-100 bg-gray-50/60 px-3.5 py-2.5">
+                <span className="text-[13px] font-medium">{c.label}</span>
+                <span className="flex-none rounded-full bg-orange-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-orange-700">{c.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end border-t border-gray-100 px-5 py-3.5">
+          <button onClick={onClose} className={SECONDARY}>Close</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -689,7 +763,7 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
                   </td>
                   <td className={cn("px-2 py-2.5", u.mobile_no ? "" : "text-amber-600")}>{u.mobile_no || "missing"}</td>
                   <td className="px-2 py-2.5">{u.role_name ? <RoleBadge label={u.role_name} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
-                  <td className="px-2 py-2.5 text-xs text-gray-500">{u.level_name ? `${u.level_name} · ${u.location_value}` : "—"}</td>
+                  <td className="px-2 py-2.5 text-xs text-gray-500">{u.level_name ? `${u.level_name}${u.location_name ? ` · ${u.location_name}` : u.location_value ? ` · ${u.location_value}` : ""}` : "—"}</td>
                   <td className="px-2 py-2.5"><StatusPill active={u.is_acitve === "Y"} /></td>
                   <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{fmtDate(u.inserted_time)}</td>
                   <td className="whitespace-nowrap px-4 py-2 text-right">
@@ -717,6 +791,8 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [scopeEdit, setScopeEdit] = useState(false);
+  const [locEdit, setLocEdit] = useState(false);
   const dirty = JSON.stringify(draft) !== JSON.stringify(u);
 
   const grp = draft.group_id ? groups.find((g) => g.user_group_id === draft.group_id) : null;
@@ -748,7 +824,7 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
       <Card className="p-7">
         <div className="flex flex-wrap items-start justify-between gap-x-8 gap-y-4">
           <div className="flex min-w-[220px] items-center gap-4">
-            <Avatar name={draft.member_name} imageUrl={draft.image_url} className="h-14 w-14 rounded-full bg-gradient-to-br from-amber-600 to-orange-700 shadow-md" textClassName="font-head text-lg font-bold text-white" />
+            <Avatar name={draft.member_name} imageUrl={draft.image_url} className="h-14 w-14 rounded-full bg-gradient-to-br from-amber-600 to-orange-700 shadow-md" textClassName="font-head text-lg font-bold text-white" zoomable/>
             <div className="min-w-0">
               <div className="truncate font-head text-base font-semibold">{draft.member_name || NO_NAME}</div>
             </div>
@@ -783,17 +859,37 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
               className="w-32 rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400" placeholder="9xxxxxxxxx" />
           </FieldInline>
           <FieldInline label="Access Scope">
-            <select value={draft.level_id} onChange={(e) => setLevel(+e.target.value)}
-              className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
-              {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
-            </select>
+            {scopeEdit ? (
+              <>
+                <select autoFocus value={draft.level_id} onChange={(e) => setLevel(+e.target.value)}
+                  className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
+                  {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
+                </select>
+                <button onClick={() => setScopeEdit(false)} title="Done" className="text-gray-400 hover:text-yellow-600"><Check size={14} /></button>
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-gray-800">{draft.level_name || "— none —"}</span>
+                <button onClick={() => setScopeEdit(true)} title="Edit access scope" className="text-gray-400 hover:text-yellow-600"><Pencil size={12} /></button>
+              </>
+            )}
           </FieldInline>
           <FieldInline label="Location">
-            <select value={draft.location_value} onChange={(e) => set({ location_value: e.target.value })}
-              className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
-              <option value="">Select…</option>
-              {locList.map((l) => <option key={l} value={l}>{l}</option>)}
-            </select>
+            {locEdit ? (
+              <>
+                <select autoFocus value={draft.location_value} onChange={(e) => set({ location_value: e.target.value, location_name: e.target.value })}
+                  className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
+                  <option value="">Select…</option>
+                  {locList.map((l) => <option key={l} value={l}>{l}</option>)}
+                </select>
+                <button onClick={() => setLocEdit(false)} title="Done" className="text-gray-400 hover:text-yellow-600"><Check size={14} /></button>
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-gray-800">{draft.location_name || draft.location_value || "— none —"}</span>
+                <button onClick={() => setLocEdit(true)} title="Edit location" className="text-gray-400 hover:text-yellow-600"><Pencil size={12} /></button>
+              </>
+            )}
           </FieldInline>
           <FieldInline label="Group">
             <select value={draft.group_id || ""} onChange={(e) => set({ group_id: e.target.value ? +e.target.value : null })}
@@ -1096,6 +1192,16 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
     setLookupMode(mode); setErr(""); setMobileCandidates([]); lookedUpRef.current = "";
   }
 
+  // "Create Membership ID" skips lookup entirely and drops straight into the
+  // step-2 manual-entry form — same path the "not found" case already uses,
+  // just without having searched for anything first.
+  function startManualCreate() {
+    setLookupMode("manual"); setCadre(null); setNotFound(true);
+    setName(""); setMobile(""); setMid(""); setMobileCandidates([]);
+    setErr(""); lookedUpRef.current = "";
+    setStep(2);
+  }
+
   // A found cadre already has a login (AMID set — the by-mobile query only
   // joins active logins, so AMID present always means an active one) → open
   // the existing-login panel. Otherwise the by-mobile query only returns a
@@ -1109,7 +1215,8 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
       setExistingMember(existing || {
         activity_member_id: c.AMID, member_name: c.MEMBERNAME,
         membership_id: c.MID, mobile_no: c.MOBILENO, is_acitve: "Y",
-        role_name: c.TEAMNAME, level_name: c.LOCLEVEL, location_value: c.LOCVALUE, image_url: c.IMAGE,
+        role_name: c.TEAMNAME, level_name: c.LOCLEVEL, location_value: c.LOCVALUE,
+        location_name: c.LOCATION, image_url: c.IMAGE,
       });
       setCadre(null); setNotFound(false);
       setStep(2);
@@ -1297,12 +1404,20 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
     setExistingMember(null);
     setStep(1);
   }
+  // At step 1, once one of the three lookup options has been picked, "back"
+  // should land on the options page first — only exits to the dashboard once
+  // no option is selected.
+  const atStep1Options = step === 1 && !!lookupMode;
+  function backFromStep1() {
+    if (atStep1Options) switchMode(null);
+    else onBack();
+  }
 
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <button onClick={showBackToResults ? backToResults : onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
-          <ChevronLeft size={16} /> {showBackToResults ? "Back to results" : "Back to logins"}
+        <button onClick={showBackToResults ? backToResults : backFromStep1} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
+          <ChevronLeft size={16} /> {showBackToResults ? "Back to results" : atStep1Options ? "Back to options" : "Back to logins"}
         </button>
       </div>
 
@@ -1313,7 +1428,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
             <Card className="w-full p-12">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-5">
-                  <Avatar name={existingMember.member_name} imageUrl={existingMember.image_url} className="h-40 w-40 rounded-full bg-gradient-to-br from-amber-600 to-orange-700" textClassName="font-head text-2xl font-bold text-white" />
+                  <Avatar name={existingMember.member_name} imageUrl={existingMember.image_url} className="h-40 w-40 rounded-full bg-gradient-to-br from-amber-600 to-orange-700" textClassName="font-head text-2xl font-bold text-white" zoomable />
                   <div className="min-w-0 text-lg">
                     <div className="text-gray-500">Name: <span className="font-head font-semibold text-gray-900">{existingMember.member_name || NO_NAME}</span></div>
                     <div className="mt-1 text-gray-500">MID: <span className="font-medium text-gray-800">{existingMember.membership_id || "— none —"}</span></div>
@@ -1326,7 +1441,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
               </div>
 
               <div className="mt-6 flex flex-wrap items-center gap-x-10 gap-y-2 border-t border-gray-100 pt-6 text-lg">
-                <div className="text-gray-500">Location: <span className="font-medium text-gray-800">{existingMember.level_name ? `${existingMember.level_name}${existingMember.location_value ? ` · ${existingMember.location_value}` : ""}` : "— none —"}</span></div>
+                <div className="text-gray-500">Location: <span className="font-medium text-gray-800">{existingMember.level_name ? `${existingMember.level_name}${existingMember.location_name ? ` · ${existingMember.location_name}` : existingMember.location_value ? ` · ${existingMember.location_value}` : ""}` : "— none —"}</span></div>
                 <div className="flex items-center gap-2 text-gray-500">Role: <RoleBadge label={existingMember.role_name || "No role"} /></div>
               </div>
 
@@ -1402,6 +1517,11 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                       <Smartphone size={26} className="text-yellow-700" />
                       <span className="font-head text-sm font-semibold">Mobile No</span>
                     </button>
+                    <button type="button" onClick={startManualCreate}
+                      className="flex w-44 flex-col items-center gap-2.5 rounded-2xl border-2 border-gray-200 p-6 text-center transition-colors hover:border-yellow-400 hover:bg-yellow-50">
+                      <UserPlus size={26} className="text-yellow-700" />
+                      <span className="font-head text-sm font-semibold">Create Membership ID</span>
+                    </button>
                   </div>
                 </div>
               ) : (
@@ -1443,7 +1563,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                               <div className="text-[11px] text-gray-400">MID {c.MID || "— none —"} · cadre #{c.CADREID}</div>
                             </div>
                             {c.AMID
-                              ? <span className="flex-none rounded-full bg-yellow-100 px-2.5 py-0.5 text-[11px] font-medium text-yellow-700">Has login · {c.TEAMNAME || "no role"}</span>
+                              ? <span className="flex-none rounded-full bg-yellow-100 px-2.5 py-0.5 text-[11px] font-medium text-yellow-700">Has login · {c.TEAMNAME || "no role"}{c.LOCATION ? ` · ${c.LOCATION}` : ""}</span>
                               : <span className="flex-none rounded-full bg-gray-100 px-2.5 py-0.5 text-[11px] font-medium text-gray-500">No login yet</span>}
                           </button>
                         ))}
@@ -1466,6 +1586,13 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                     <HKV k="Mobile" v={cadre.mobile_no} />
                     <HKV k="Gender" v={cadre.gender || "—"} />
                     <HKV k="Constituency ID" v={cadre.constituency_id ?? "—"} />
+                  </div>
+                </Card>
+              ) : lookupMode === "manual" ? (
+                <Card className="border-l-4 border-l-blue-400 p-6">
+                  <div className="flex items-center gap-2 text-[12.5px] text-blue-600">
+                    <UserPlus size={15} />
+                    Creating a new membership. Enter the member's details below — generate a placeholder Membership ID or leave it blank if you don't have one yet.
                   </div>
                 </Card>
               ) : (
@@ -1542,12 +1669,16 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
         </div>
 
         <div className="mt-5 flex justify-between gap-2.5 border-t border-gray-100 pt-4">
+<<<<<<< Updated upstream
           {/* <button onClick={step === 1 ? onBack : () => setStep(step - 1)} className={SECONDARY}>{step === 1 ? "Cancel" : "Back"}</button> */
           <button
             onClick={step === 1 ? onBack : () => setStep(step - 1)}
             className={step === 1 ? "bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-md" : SECONDARY}>
             {step === 1 ? "Cancel" : "Back"}
             </button>}
+=======
+          <button onClick={step === 1 ? backFromStep1 : () => { if (step === 2 && lookupMode === "manual") setLookupMode(null); setStep(step - 1); }} className={SECONDARY}>{step === 1 ? (atStep1Options ? "Back" : "Cancel") : "Back"}</button>
+>>>>>>> Stashed changes
           {step === 1 && lookupMode && <button onClick={() => doLookup()} disabled={looking} className={PRIMARY}>{looking ? "Looking up…" : "Look up cadre"}</button>}
           {step === 2 && <button onClick={() => { if (!name.trim()) return setErr("Name is required."); setErr(""); setStep(3); }} className={PRIMARY}>Next: access</button>}
           {step === 3 && <button onClick={submit} className={PRIMARY}>Create &amp; generate OTP</button>}

@@ -83,7 +83,7 @@ function computeStats(members) {
   const inactive = members.filter((m) => m.is_acitve === "N");
   const roleCounts = {}, levelCounts = {}, compCounts = {};
   active.forEach((m) => {
-    roleCounts[m.role_name] = (roleCounts[m.role_name] || 0) + 1;
+    roleCounts[m.role_short] = (roleCounts[m.role_short] || 0) + 1;
     levelCounts[m.level_name] = (levelCounts[m.level_name] || 0) + 1;
     m.component_ids.forEach((id) => { compCounts[id] = (compCounts[id] || 0) + 1; });
   });
@@ -480,8 +480,8 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
   ];
   const roleRows = Object.entries(stats.roleCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const maxComp = Math.max(1, ...stats.topComponents.map((c) => c.count));
-  const roleMembers = expandedRole ? members.filter((m) => m.is_acitve === "Y" && m.role_name === expandedRole) : [];
-  const componentsRoleMembers = componentsRole ? members.filter((m) => m.is_acitve === "Y" && m.role_name === componentsRole) : [];
+  const roleMembers = expandedRole ? members.filter((m) => m.is_acitve === "Y" && m.role_short === expandedRole) : [];
+  const componentsRoleMembers = componentsRole ? members.filter((m) => m.is_acitve === "Y" && m.role_short === componentsRole) : [];
   const componentsRoleStats = (() => {
     const counts = {};
     componentsRoleMembers.forEach((m) => m.component_ids.forEach((id) => { counts[id] = (counts[id] || 0) + 1; }));
@@ -602,7 +602,7 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
                       </div>
                     </td>
                     <td className={cn("px-2 py-2.5", m.mobile_no ? "" : "text-amber-600")}>{m.mobile_no || "missing"}</td>
-                    <td className="px-2 py-2.5">{m.role_name ? <RoleBadge label={m.role_name} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
+                    <td className="px-2 py-2.5">{m.role_short ? <RoleBadge label={m.role_short} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
                     <td className="px-2 py-2.5 text-xs text-gray-500">{m.level_name ? `${m.level_name}${m.location_name ? ` · ${m.location_name}` : m.location_value ? ` · ${m.location_value}` : ""}` : "—"}</td>
                     <td className="px-2 py-2.5"><StatusPill active={m.is_acitve === "Y"} /></td>
                     <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{fmtDate(m.inserted_time)}</td>
@@ -762,7 +762,7 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
                     </div>
                   </td>
                   <td className={cn("px-2 py-2.5", u.mobile_no ? "" : "text-amber-600")}>{u.mobile_no || "missing"}</td>
-                  <td className="px-2 py-2.5">{u.role_name ? <RoleBadge label={u.role_name} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
+                  <td className="px-2 py-2.5">{u.role_short ? <RoleBadge label={u.role_short} /> : <span className="text-[11px] text-gray-400">—</span>}</td>
                   <td className="px-2 py-2.5 text-xs text-gray-500">{u.level_name ? `${u.level_name}${u.location_name ? ` · ${u.location_name}` : u.location_value ? ` · ${u.location_value}` : ""}` : "—"}</td>
                   <td className="px-2 py-2.5"><StatusPill active={u.is_acitve === "Y"} /></td>
                   <td className="whitespace-nowrap px-2 py-2.5 text-xs text-gray-500">{fmtDate(u.inserted_time)}</td>
@@ -1167,6 +1167,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
   const [existingMember, setExistingMember] = useState(null);
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
+  const [otp, setOtp] = useState("");
   const [roleId, setRoleId] = useState(12);
   const [levelId, setLevelId] = useState(5);
   const [location, setLocation] = useState("");
@@ -1197,7 +1198,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
   // just without having searched for anything first.
   function startManualCreate() {
     setLookupMode("manual"); setCadre(null); setNotFound(true);
-    setName(""); setMobile(""); setMid(""); setMobileCandidates([]);
+    setName(""); setMobile(""); setMid(""); setOtp(""); setMobileCandidates([]);
     setErr(""); lookedUpRef.current = "";
     setStep(2);
   }
@@ -1215,7 +1216,11 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
       setExistingMember(existing || {
         activity_member_id: c.AMID, member_name: c.MEMBERNAME,
         membership_id: c.MID, mobile_no: c.MOBILENO, is_acitve: "Y",
-        role_name: c.TEAMNAME, level_name: c.LOCLEVEL, location_value: c.LOCVALUE,
+        // TEAMNAME is UT.short_name (the by-mobile query never selects UT.type),
+        // so role_short carries it correctly; role_name reuses it too since a
+        // short name is the only role data this endpoint has to offer.
+        role_name: c.TEAMNAME, role_short: c.TEAMNAME,
+        level_name: c.LOCLEVEL, location_value: c.LOCVALUE,
         location_name: c.LOCATION, image_url: c.IMAGE,
       });
       setCadre(null); setNotFound(false);
@@ -1606,17 +1611,25 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                 </Card>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1.5"><span className={LABEL}>Name {cadre && <span className="text-gray-400">(from cadre)</span>}</span>
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Name * {cadre && <span className="text-gray-400">(from cadre)</span>}</span>
                   <input value={name} onChange={(e) => setName(e.target.value)} readOnly={!!cadre} className={cn(INPUT, cadre && "opacity-70")} placeholder="Full name" /></label>
-                <label className="flex flex-col gap-1.5"><span className={LABEL}>Mobile (OTP)</span>
-                  <input value={mobile} onChange={(e) => setMobile(e.target.value)} className={INPUT} placeholder="9xxxxxxxxx" /></label>
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Mobile *</span>
+                  <div className="flex gap-2">
+                    <input value={mobile} onChange={(e) => setMobile(e.target.value)} className={cn(INPUT, "flex-1")} placeholder="9xxxxxxxxx" />
+                    <button type="button" onClick={() => setOtp(generateOtp())} className={cn(SECONDARY, "whitespace-nowrap px-3")}>Generate OTP</button>
+                  </div>
+                </label>
                 {!cadre && (
-                  <label className="flex flex-col gap-1.5"><span className={LABEL}>Membership ID (optional)</span>
+                  <label className="flex flex-col gap-1.5"><span className={LABEL}>Membership ID *</span>
                     <div className="flex gap-2">
-                      <input value={mid} onChange={(e) => setMid(e.target.value)} className={cn(INPUT, "flex-1")} placeholder="If known" />
+                      <input value={mid} onChange={(e) => setMid(e.target.value)} className={cn(INPUT, "flex-1")} placeholder="e.g. 12345678" />
                       <button type="button" onClick={() => setMid(generatePlaceholderMid())} className={cn(SECONDARY, "whitespace-nowrap px-3")}>Generate MID</button>
                     </div>
                   </label>
+                )}
+                {otp && (
+                  <label className="flex flex-col gap-1.5"><span className={LABEL}>Generated OTP</span>
+                    <input value={otp} readOnly className={cn(INPUT, "opacity-70")} /></label>
                 )}
               </div>
               {err && <ErrLine>{err}</ErrLine>}
@@ -1675,7 +1688,12 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
             {step === 1 ? (atStep1Options ? "Back" : "Cancel") : "Back"}
           </button>
           {step === 1 && lookupMode && <button onClick={() => doLookup()} disabled={looking} className={PRIMARY}>{looking ? "Looking up…" : "Look up cadre"}</button>}
-          {step === 2 && <button onClick={() => { if (!name.trim()) return setErr("Name is required."); setErr(""); setStep(3); }} className={PRIMARY}>Next: access</button>}
+          {step === 2 && <button onClick={() => {
+            if (!name.trim()) return setErr("Name is required.");
+            if (!mobile.trim()) return setErr("Mobile number is required.");
+            if (!cadre && !mid.trim()) return setErr("Membership ID is required.");
+            setErr(""); setStep(3);
+          }} className={PRIMARY}>Next: access</button>}
           {step === 3 && <button onClick={submit} className={PRIMARY}>Create &amp; generate OTP</button>}
         </div>
       </Card>

@@ -181,7 +181,7 @@ MEMBERS_QUERY = f"""
     AM.activity_member_id, TC.tdp_cadre_id, CONCAT("#", TC.membership_id) AS membership_id,
     AM.member_name, TC.mobile_no, AM.is_acitve, AM.inserted_time, AM.updated_by,
     CONCAT("{CADRE_IMAGE_BASE}", TC.image) AS image_url,
-    UT.user_type_id AS role_id, UT.type AS role_name,
+    UT.user_type_id AS role_id, UT.type AS role_name, UT.short_name AS role_short,
     AMAL.activity_member_level_id AS level_id, UL.level AS level_name,
     AMAL.activity_location_value AS location_value,
     CASE WHEN AMAL.activity_member_level_id = 2 THEN 'AP'
@@ -211,7 +211,7 @@ def rollup_members(rows):
         if m is None:
             m = {k: r[k] for k in (
                 "activity_member_id", "tdp_cadre_id", "membership_id", "member_name",
-                "mobile_no", "is_acitve", "inserted_time", "updated_by", "image_url", "role_id", "role_name",
+                "mobile_no", "is_acitve", "inserted_time", "updated_by", "image_url", "role_id", "role_name", "role_short",
                 "level_id", "level_name", "location_value", "location_name",
             )}
             m["component_ids"] = []
@@ -333,6 +333,38 @@ CADRE_BY_MOBILE_SELECT = f"""
 @app.get("/api/cadre/by-mobile/{mobile}")
 def cadre_by_mobile(mobile: str):
     return run(CADRE_BY_MOBILE_SELECT, (mobile,))
+
+
+# 4c) access-type grant count for a MID (read-only, standalone check — NOT used
+# by MEMBER_SELECT/MEMBERS_QUERY above). Those two collapse
+# activity_member_access_type with MAX()/no GROUP BY on the assumption a login
+# has at most one active role grant at a time (see comments at MEMBER_SELECT
+# and CADRE_BY_MOBILE_SELECT). This exists purely to check that assumption for
+# a given MID by listing every access_type row (active or not) tied to it,
+# instead of trusting the aggregated columns.
+ACCESS_TYPES_BY_MID_SELECT = """
+  SELECT AMAT.activity_member_access_type_id, AMAT.activity_member_id,
+         AMAT.user_type_id, UT.type AS role_name, UT.short_name AS role_short,
+         AMAT.is_active
+  FROM tdp_cadre TC
+  JOIN activity_member AM ON AM.tdp_cadre_id = TC.tdp_cadre_id
+  JOIN activity_member_access_type AMAT ON AMAT.activity_member_id = AM.activity_member_id
+  LEFT JOIN user_type UT ON UT.user_type_id = AMAT.user_type_id
+  WHERE TC.membership_id = %s
+  ORDER BY AM.activity_member_id, AMAT.is_active DESC, AMAT.user_type_id
+"""
+
+
+@app.get("/api/cadre/{mid}/access-types")
+def cadre_access_types(mid: str):
+    rows = run(ACCESS_TYPES_BY_MID_SELECT, (mid,))
+    active = [r for r in rows if r["is_active"] == "Y"]
+    return {
+        "membership_id": mid,
+        "total_grants": len(rows),
+        "active_grants": len(active),
+        "grants": rows,
+    }
 
 
 # --- WRITE ACCESS DISABLED FOR NOW -----------------------------------------

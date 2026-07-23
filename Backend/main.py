@@ -136,6 +136,40 @@ MEMBER_SELECT = f"""
 GROUP_BY = """ GROUP BY AM.activity_member_id, AM.member_name, AM.tdp_cadre_id,
   AM.inserted_time, AM.updated_by, AM.is_acitve, TC.membership_id, TC.mobile_no, TC.image"""
 
+# A login can actually hold more than one active access_level grant at once (e.g. an
+# ASSEMBLY seat plus a PARLIAMENT seat). MEMBER_SELECT/MEMBERS_QUERY above still collapse
+# that to a single MAX()'d level/location for backward compat, but the Detail screen wants
+# every active location, so this fetches them separately and gets attached as `locations`.
+MEMBER_LOCATIONS_QUERY = """
+  SELECT AMAL.activity_member_id,
+         AMAL.activity_member_level_id AS level_id, UL.level AS level_name,
+         AMAL.activity_location_value AS location_value,
+         CASE WHEN AMAL.activity_member_level_id = 2 THEN 'AP'
+              WHEN AMAL.activity_member_level_id = 4 THEN PC.name
+              WHEN AMAL.activity_member_level_id = 5 THEN AC.name ELSE '' END AS location_name
+  FROM activity_member_access_level AMAL
+  LEFT JOIN user_level UL ON UL.user_level_id = AMAL.activity_member_level_id
+  LEFT JOIN constituency PC ON AMAL.activity_location_value = PC.constituency_id AND AMAL.activity_member_level_id = 4
+  LEFT JOIN constituency AC ON AMAL.activity_location_value = AC.constituency_id AND AMAL.activity_member_level_id = 5
+  WHERE AMAL.is_active = 'Y'
+"""
+
+
+def attach_locations(members_by_id):
+    """members_by_id: {activity_member_id: member_dict}. Adds a `locations` list to each, in place."""
+    ids = list(members_by_id.keys())
+    for m in members_by_id.values():
+        m["locations"] = []
+    if not ids:
+        return
+    placeholders = ",".join(["%s"] * len(ids))
+    rows = run(MEMBER_LOCATIONS_QUERY + f" AND AMAL.activity_member_id IN ({placeholders})", ids)
+    for r in rows:
+        members_by_id[r["activity_member_id"]]["locations"].append({
+            "level_id": r["level_id"], "level_name": r["level_name"],
+            "location_value": r["location_value"], "location_name": r["location_name"],
+        })
+
 app = FastAPI(title="UA admin API")
 # PUT/POST/DELETE listed here too so re-enabling the commented-out write
 # endpoints below doesn't also require remembering to update this line.
@@ -228,6 +262,7 @@ def members(status: str = "active"):
         result = [m for m in result if m["is_acitve"] == "Y"]
     elif status == "inactive":
         result = [m for m in result if m["is_acitve"] == "N"]
+    attach_locations({m["activity_member_id"]: m for m in result})
     return result
 
 
@@ -237,7 +272,9 @@ def member(member_id: int):
     row = run(MEMBER_SELECT + " WHERE AM.activity_member_id = %s" + GROUP_BY, (member_id,), one=True)
     if not row:
         raise HTTPException(status_code=404, detail="not found")
-    return shape(row)
+    row = shape(row)
+    attach_locations({row["activity_member_id"]: row})
+    return row
 
 
 # 3) lookups
@@ -257,6 +294,26 @@ def components():
     return run(
         "SELECT component_id AS id, name, actual_name AS actual, dashboard_display_name AS display, order_no "
         "FROM component ORDER BY component_id"
+    )
+
+
+@app.get("/api/lookups/constituencies")
+def constituencies():
+    return run(
+        "SELECT * FROM constituency "
+        "WHERE state_id = 1 AND deform_date IS NULL AND election_scope_id = 2 "
+        "GROUP BY constituency_id"
+    )
+
+
+@app.get("/api/lookups/parliaments")
+def parliaments():
+    return run(
+        "SELECT C.constituency_id, C.name, C.election_scope_id "
+        "FROM constituency C "
+        "JOIN election E ON E.election_scope_id = C.election_scope_id "
+        "WHERE C.election_scope_id = 1 AND C.state_id = 1 "
+        "AND E.election_year = 2024 AND C.deform_date IS NULL"
     )
 
 

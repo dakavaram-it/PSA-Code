@@ -9,7 +9,13 @@
       "Bash(node -e \"require.resolve\\('playwright'\\)\")",
       "Bash(npx --no-install playwright --version)",
       "Bash(taskkill //PID 14884 //F)",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5173/)",
+      "Bash(taskkill //PID 7344 //F)",
+      "Bash(mkdir -p /c/Users/Suresh/AppData/Local/Temp/claude/e--Senexxel-PSA-Code/9d9d6884-6892-4dff-b87f-6a7c9a7a7b62/scratchpad)",
+      "Bash(curl -s http://localhost:4000/api/lookups/constituencies -o /c/Users/Suresh/AppData/Local/Temp/claude/e--Senexxel-PSA-Code/9d9d6884-6892-4dff-b87f-6a7c9a7a7b62/scratchpad/constituencies.json)",
+      "Bash(curl -s http://localhost:4000/api/lookups/parliaments -o /c/Users/Suresh/AppData/Local/Temp/claude/e--Senexxel-PSA-Code/9d9d6884-6892-4dff-b87f-6a7c9a7a7b62/scratchpad/parliaments.json)",
+      "Read(//c/Users/Suresh/AppData/Local/Temp/claude/e--Senexxel-PSA-Code/9d9d6884-6892-4dff-b87f-6a7c9a7a7b62/scratchpad/**)",
+      "Bash(python -c ' *)"
     ]
   }
 }

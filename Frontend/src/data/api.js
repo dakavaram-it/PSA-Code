@@ -20,6 +20,11 @@ export const getUserLevels = () => fetch(`${BASE}/lookups/user-levels`).then(jso
 
 export const getComponents = () => fetch(`${BASE}/lookups/components`).then(json);
 
+// Live AP assembly constituencies (175) / parliamentary constituencies (25) —
+// used to populate the Access Scope location picker with real name->id pairs.
+export const getConstituencies = () => fetch(`${BASE}/lookups/constituencies`).then(json);
+export const getParliaments = () => fetch(`${BASE}/lookups/parliaments`).then(json);
+
 // null when the MID has no cadre (HTTP 404)
 export const lookupCadre = (mid) =>
   fetch(`${BASE}/cadre/${encodeURIComponent(mid)}`).then((r) => (r.ok ? r.json() : null));

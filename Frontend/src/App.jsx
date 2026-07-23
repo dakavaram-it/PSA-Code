@@ -5,7 +5,7 @@ import {
   AlertTriangle, UserCheck, UserX, FolderTree, Save, RotateCcw, Copy, UserPlus,
   IdCard, Smartphone, Pencil,
 } from "lucide-react";
-import { getMembers, getUserTypes, getUserLevels, getComponents, lookupCadre, lookupCadreByMobile, updateMemberRole, updateMemberActive } from "./data/api.js";
+import { getMembers, getUserTypes, getUserLevels, getComponents, getConstituencies, getParliaments, lookupCadre, lookupCadreByMobile, updateMemberRole, updateMemberActive } from "./data/api.js";
 import { cn } from "./lib/utils.js";
 
 /*
@@ -39,6 +39,10 @@ let USER_TYPES = [];
 let USER_LEVELS = [];
 let USED_LEVEL_IDS = [5, 4, 2];
 let COMPONENTS = [];
+// Live AP assembly (175) / parliamentary (25) constituencies, for the Access
+// Scope location picker on the Detail screen. { id, name } pairs.
+let LIVE_CONSTITUENCIES = [];
+let LIVE_PARLIAMENTS = [];
 const STANDARD_BUNDLE = [82, 94, 129, 131];
 const componentLabel = (c) => c.display || c.actual || c.name;
 
@@ -149,13 +153,15 @@ export default function AdminConsole() {
   useEffect(() => {
     (async () => {
       try {
-        const [uts, uls, comps, mems] = await Promise.all([
-          getUserTypes(), getUserLevels(), getComponents(), getMembers("all"),
+        const [uts, uls, comps, constituencies, parliaments, mems] = await Promise.all([
+          getUserTypes(), getUserLevels(), getComponents(), getConstituencies(), getParliaments(), getMembers("all"),
         ]);
         USER_TYPES = uts;
         USER_LEVELS = uls.levels;
         USED_LEVEL_IDS = uls.used_level_ids;
         COMPONENTS = comps;
+        LIVE_CONSTITUENCIES = constituencies.map((c) => ({ id: c.constituency_id, name: c.name }));
+        LIVE_PARLIAMENTS = parliaments.map((p) => ({ id: p.constituency_id, name: p.name }));
         setMembers(mems);
       } catch (e) {
         setLoadError("Could not reach the API. Is the backend running on http://localhost:4000 ?");
@@ -478,7 +484,11 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
     { label: "Active Users", value: stats.active, icon: <UserCheck size={20} />, note: "Can sign in", cat: "green", onClick: onViewActive },
     { label: "Inactive Users", value: stats.inactive, icon: <UserX size={20} />, note: "Deactivated", cat: "gray", onClick: onViewInactive },
   ];
-  const roleRows = Object.entries(stats.roleCounts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const HIDDEN_ROLES = new Set(["OTHERS", "LN TEAM", "TEST USER", "MYTDP APP", "null"]);
+  const roleRows = Object.entries(stats.roleCounts)
+    .filter(([role]) => !HIDDEN_ROLES.has(role) && !/^OTHERS?$|MYTDP/i.test(role))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8);
   const maxComp = Math.max(1, ...stats.topComponents.map((c) => c.count));
   const roleMembers = expandedRole ? members.filter((m) => m.is_acitve === "Y" && m.role_short === expandedRole) : [];
   const componentsRoleMembers = componentsRole ? members.filter((m) => m.is_acitve === "Y" && m.role_short === componentsRole) : [];
@@ -714,7 +724,9 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
         <Field label="Role">
           <select value={filters.role} onChange={(e) => setFilters({ ...filters, role: e.target.value })} className={INPUT}>
             <option value="all">All roles</option>
-            {USER_TYPES.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}
+            {USER_TYPES.filter((r) => r.type !== "STATE" && r.type !== "COUNTRY").map((r) => (
+              <option key={r.id} value={r.id}>{r.type === "CONSTITUENCY" ? "ACI" : r.type}</option>
+            ))}
           </select>
         </Field>
         <Field label="Level">
@@ -736,22 +748,27 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
       )}
 
       <Card className="overflow-hidden">
-        <div className="overflow-x-auto">
+        <div className="flex items-center justify-between p-6 pb-0">
+          <SectionTitle icon={<Eye size={14} />}>
+            {filters.status === "active" ? "Active" : filters.status === "inactive" ? "Inactive" : "All"} — logins ({rows.length})
+          </SectionTitle>
+        </div>
+        <div className="mt-3.5 max-h-[420px] overflow-auto">
           <table className="w-full border-collapse text-sm">
-            <thead>
+            <thead className="sticky top-0 z-10">
               <tr className="bg-gray-50/80 text-[11px] uppercase tracking-wide text-gray-400">
-                <th className="w-9 py-2.5 pl-4 text-left">
+                <th className="w-9 bg-gray-50/80 py-2.5 pl-6 text-left">
                   <input type="checkbox" checked={allSel} onChange={toggleAll} className="h-4 w-4 accent-yellow-600" />
                 </th>
                 {["Membership ID", "Name", "Mobile", "Role", "Scope", "Status", "Created", ""].map((h, i) => (
-                  <th key={i} className={cn("whitespace-nowrap font-medium", i === 7 ? "px-4 py-2.5 text-right" : "px-2 py-2.5 text-left")}>{h}</th>
+                  <th key={i} className={cn("whitespace-nowrap bg-gray-50/80 font-medium", i === 7 ? "px-4 py-2.5 text-right" : "px-2 py-2.5 text-left")}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {rows.map((u) => (
                 <tr key={u.activity_member_id} className="border-t border-gray-100 transition-colors hover:bg-yellow-50/50">
-                  <td className="pl-4"><input type="checkbox" checked={selected.has(u.activity_member_id)} onChange={() => toggleOne(u.activity_member_id)} className="h-4 w-4 accent-yellow-600" /></td>
+                  <td className="pl-6"><input type="checkbox" checked={selected.has(u.activity_member_id)} onChange={() => toggleOne(u.activity_member_id)} className="h-4 w-4 accent-yellow-600" /></td>
                   <td onClick={() => onOpen(u.activity_member_id)} className="cursor-pointer px-2 py-2.5 font-head font-semibold hover:text-yellow-600">
                     {u.membership_id || <span className="text-[11px] text-amber-600">— none —</span>}
                   </td>
@@ -799,11 +816,25 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
   const inheritedIds = new Set(grp ? grp.component_ids : []);
   const effective = effectiveComponents(draft, groups);
   const addable = COMPONENTS.filter((c) => !inheritedIds.has(c.id) && !draft.component_ids.includes(c.id));
-  const locList = draft.level_id === 5 ? CONSTITUENCIES : draft.level_id === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
+  const locList = draft.level_id === 5 ? LIVE_CONSTITUENCIES : draft.level_id === 4 ? LIVE_PARLIAMENTS : [{ id: draft.location_value ?? "", name: "Andhra Pradesh" }];
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const setRole = (id) => { const r = USER_TYPES.find((x) => x.id === id); set({ role_id: id, role_name: r.type, role_short: r.short }); setRoleMenuOpen(false); };
-  const setLevel = (id) => { const l = USER_LEVELS.find((x) => x.id === id); set({ level_id: id, level_name: l.name, location_value: "" }); };
+  const setLevel = (id) => {
+    const l = USER_LEVELS.find((x) => x.id === id);
+    set({ level_id: id, level_name: l.name, location_value: "", location_name: "", locations: [] });
+  };
+  // Local-only, staged multi-select: toggles a location in/out of draft.locations.
+  // Not wired to a write endpoint yet — "Save changes" still only persists the
+  // single location_value/location_name pair (mirrored from the first entry here).
+  const toggleLocation = (loc) => {
+    const current = draft.locations || [];
+    const exists = current.some((x) => x.location_value === loc.id);
+    const next = exists
+      ? current.filter((x) => x.location_value !== loc.id)
+      : [...current, { level_id: draft.level_id, level_name: draft.level_name, location_value: loc.id, location_name: loc.name }];
+    set({ locations: next, location_value: next[0]?.location_value ?? "", location_name: next[0]?.location_name ?? "" });
+  };
   const addPersonal = (id) => set({ component_ids: [...draft.component_ids, id].sort((a, b) => a - b) });
   const removePersonal = (id) => set({ component_ids: draft.component_ids.filter((x) => x !== id) });
 
@@ -859,37 +890,45 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
               className="w-32 rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400" placeholder="9xxxxxxxxx" />
           </FieldInline>
           <FieldInline label="Access Scope">
-            {scopeEdit ? (
-              <>
-                <select autoFocus value={draft.level_id} onChange={(e) => setLevel(+e.target.value)}
-                  className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
-                  {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}
-                </select>
-                <button onClick={() => setScopeEdit(false)} title="Done" className="text-gray-400 hover:text-yellow-600"><Check size={14} /></button>
-              </>
-            ) : (
-              <>
-                <span className="font-medium text-gray-800">{draft.level_name || "— none —"}</span>
-                <button onClick={() => setScopeEdit(true)} title="Edit access scope" className="text-gray-400 hover:text-yellow-600"><Pencil size={12} /></button>
-              </>
-            )}
+            <span className="font-medium text-gray-800">{draft.level_name || "— none —"}</span>
+            <div className="relative">
+              <button onClick={() => setScopeEdit((v) => !v)} title="Edit access scope" className="text-gray-400 hover:text-yellow-600"><Pencil size={12} /></button>
+              {scopeEdit && (
+                <div className="absolute left-0 top-full z-10 mt-1 w-40 overflow-hidden rounded-xl border border-gray-100 bg-white py-1 shadow-xl">
+                  {USED_LEVEL_IDS.map((lid) => {
+                    const l = USER_LEVELS.find((x) => x.id === lid);
+                    return (
+                      <button key={lid} onClick={() => { setLevel(lid); setScopeEdit(false); }}
+                        className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-yellow-50">{l.name}</button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </FieldInline>
           <FieldInline label="Location">
-            {locEdit ? (
-              <>
-                <select autoFocus value={draft.location_value} onChange={(e) => set({ location_value: e.target.value, location_name: e.target.value })}
-                  className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
-                  <option value="">Select…</option>
-                  {locList.map((l) => <option key={l} value={l}>{l}</option>)}
-                </select>
-                <button onClick={() => setLocEdit(false)} title="Done" className="text-gray-400 hover:text-yellow-600"><Check size={14} /></button>
-              </>
-            ) : (
-              <>
-                <span className="font-medium text-gray-800">{draft.location_name || draft.location_value || "— none —"}</span>
-                <button onClick={() => setLocEdit(true)} title="Edit location" className="text-gray-400 hover:text-yellow-600"><Pencil size={12} /></button>
-              </>
-            )}
+            <span className="font-medium text-gray-800">
+              {draft.locations && draft.locations.length > 1
+                ? `${draft.locations.length} locations`
+                : (draft.location_name || draft.location_value || "— none —")}
+            </span>
+            <div className="relative">
+              <button onClick={() => setLocEdit((v) => !v)} title="Edit location" className="text-gray-400 hover:text-yellow-600"><Pencil size={12} /></button>
+              {locEdit && (
+                <div className="absolute left-0 top-full z-10 mt-1 max-h-64 w-56 overflow-auto rounded-xl border border-gray-100 bg-white p-1 shadow-xl">
+                  {locList.map((l) => {
+                    const checked = (draft.locations || []).some((x) => x.location_value === l.id);
+                    return (
+                      <label key={l.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-gray-700 hover:bg-yellow-50">
+                        <input type="checkbox" checked={checked} onChange={() => toggleLocation(l)} className="h-3.5 w-3.5 accent-yellow-600" />
+                        {l.name}
+                      </label>
+                    );
+                  })}
+                  <button onClick={() => setLocEdit(false)} className="mt-1 w-full rounded-lg bg-yellow-50 px-2 py-1.5 text-center text-xs font-medium text-yellow-700 hover:bg-yellow-100">Done</button>
+                </div>
+              )}
+            </div>
           </FieldInline>
           <FieldInline label="Group">
             <select value={draft.group_id || ""} onChange={(e) => set({ group_id: e.target.value ? +e.target.value : null })}
@@ -901,6 +940,18 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
           <HKV k="Cadre ID" v={draft.tdp_cadre_id ? `#${draft.tdp_cadre_id}` : "unresolved"} />
           <HKV k="User ID" v={`#${draft.activity_member_id}`} />
         </div>
+        {draft.locations && draft.locations.length > 1 && (
+          <div className="mt-4 flex flex-wrap items-start gap-2 border-t border-gray-100 pt-4">
+            <span className={cn(LABEL, "pt-1")}>All locations ({draft.locations.length}):</span>
+            <div className="flex flex-1 flex-wrap gap-1.5">
+              {draft.locations.map((loc, i) => (
+                <span key={i} className="rounded-full bg-yellow-50 px-2.5 py-1 text-[11px] font-medium text-yellow-700">
+                  {loc.level_name} · {loc.location_name || loc.location_value}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         {dirty && <div className="mt-4 text-[11px] text-gray-400">Changes here are staged — click "Save changes" above to apply them.</div>}
       </Card>
 

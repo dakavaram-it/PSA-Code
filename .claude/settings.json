@@ -15,7 +15,33 @@
       "Bash(curl -s http://localhost:4000/api/lookups/constituencies -o /c/Users/Suresh/AppData/Local/Temp/claude/e--Senexxel-PSA-Code/9d9d6884-6892-4dff-b87f-6a7c9a7a7b62/scratchpad/constituencies.json)",
       "Bash(curl -s http://localhost:4000/api/lookups/parliaments -o /c/Users/Suresh/AppData/Local/Temp/claude/e--Senexxel-PSA-Code/9d9d6884-6892-4dff-b87f-6a7c9a7a7b62/scratchpad/parliaments.json)",
       "Read(//c/Users/Suresh/AppData/Local/Temp/claude/e--Senexxel-PSA-Code/9d9d6884-6892-4dff-b87f-6a7c9a7a7b62/scratchpad/**)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(git push *)",
+      "Bash(python3 -)",
+      "Bash(python -)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('Backend/main.py', encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:4000/api/lookups/user-types)",
+      "Bash(curl -s -w '\\\\nHTTP %{http_code}\\\\n' -X POST http://localhost:4099/api/cadre -H 'Content-Type: application/json' -d '{\"membership_id\":\"\",\"name\":\"Test QA User\",\"mobile_no\":\"12345\"}')",
+      "Bash(curl -s -w '\\\\nHTTP %{http_code}\\\\n' -X POST http://localhost:4099/api/cadre -H 'Content-Type: application/json' -d '{\"membership_id\":\"\",\"name\":\"  \",\"mobile_no\":\"9999999999\"}')",
+      "Bash(pkill -f \"uvicorn main:app --port 4099\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:4099/api/lookups/user-types)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" --max-time 3 http://localhost:4099/api/lookups/user-types)",
+      "Bash(rm -f /tmp/backend.log /tmp/backend_test.log 2>&1; echo done)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:4000/api/members?status=all --max-time 3)",
+      "Bash(powershell -NoProfile -Command \"Get-Process python -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime\")",
+      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort 4000 -ErrorAction SilentlyContinue\")",
+      "Bash(curl -sv http://127.0.0.1:4000/api/members?status=all --max-time 5)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} time_total=%{time_total}s\\\\n\" http://127.0.0.1:4000/api/members?status=all --max-time 25)",
+      "Bash(timeout 10 bash -c 'cat < /dev/tcp/db-projectk-prod.cluster-cxksnp5k9yp8.us-east-1.rds.amazonaws.com/3306')",
+      "Bash(echo \"exit: $?\")",
+      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort 4000 | Select-Object LocalAddress,LocalPort,State,OwningProcess; Get-Process -Id \\(Get-NetTCPConnection -LocalPort 4000\\).OwningProcess | Select-Object Id,ProcessName,Path,StartTime\")",
+      "Bash(powershell -NoProfile -Command \"Get-Process -Id 33604 | Select-Object Id,ProcessName,Path,StartTime,CPU,Responding\")",
+      "Bash(powershell -NoProfile -Command \"\\(Get-CimInstance Win32_Process -Filter 'ProcessId=33604'\\).CommandLine\")",
+      "Bash(powershell -NoProfile -Command \"Get-Date\")",
+      "Bash(powershell -NoProfile -Command \"\\(Get-Item 'e:\\\\Senexxel\\\\PSA-Code\\\\Backend\\\\main.py'\\).LastWriteTime\")"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }

@@ -13,21 +13,27 @@ database (AWS RDS, MySQL 8.0.42). It has two parts:
 
 GET endpoints use `connect()`, which issues `SET SESSION TRANSACTION READ ONLY` on every connection
 and only ever runs `SELECT`. The write endpoints — `POST /api/members`, `PUT /api/members/{id}/role`,
-`PUT /api/members/{id}/level`, `PUT /api/members/{id}/active`, `DELETE /api/members/{id}` — are the
-*only* place in this codebase that writes to the DB, and only ever touch `activity_member` and its
-three grant junctions (`activity_member_access_type`, `activity_member_access_level`,
+`PUT /api/members/{id}/level`, `PUT /api/members/{id}/active`, `POST /api/members/{id}/components`,
+`DELETE /api/members/{id}/components/{component_id}`, `DELETE /api/members/{id}` — are the *only*
+place in this codebase that writes to the DB, and only ever touch `activity_member` and its three
+grant junctions (`activity_member_access_type`, `activity_member_access_level`,
 `activity_member_component`), plus invalidating `login_otp_details` rows on deactivate/delete. They
 use a separate `connect_write()` (no read-only pragma). **Do not widen this further** — no writes to
 `tdp_cadre` (full account/identity creation stays out of scope, see
 `Dakavara_PA_Dashboard_User_Creation_Reference.md`), no new tables touched, no DDL, without being
-asked. Everything else that looks like a write in the UI (bulk activate/deactivate on the Users
-screen, the mobile/component edits on the Detail screen's "Save changes" staged draft, the "Change
-Location" picker) is still an intentionally client-side mock with no write API behind it — the
-location picker in particular has no real name→id mapping for `activity_location_value`, so it's
-deliberately not wired up (see `activity_location_value` note below). **There is no authentication in
-front of the backend** — anyone who can reach it can call every write endpoint, including delete;
-treat this as a real gap, not a formality, before this is ever exposed outside a trusted network. The
-Groups screen is also fully mock — `user_groups`/`user_group` tables exist but have no FK link to
+asked. On the Detail screen, role, active status, access scope (level + location) and personal
+component grants are all staged in the "Save changes" draft and only hit the real backend when that
+button is clicked — `saveMember` in `App.jsx` diffs the draft against the original row and fires only
+the PUT/POST/DELETE calls for what actually changed. Mobile No is the one field on that same staged
+draft that stays client-side-only, since it lives on `tdp_cadre` and there's no write endpoint for
+that table. Everything else that looks like a write in the UI (bulk activate/deactivate on the Users
+screen, the "Change Location" picker) is still an intentionally client-side mock with no write API
+behind it — the location picker in particular has no real name→id mapping for
+`activity_location_value`, so it's deliberately not wired up (see `activity_location_value` note
+below). **There is no authentication in front of the backend** — anyone who can reach it can call
+every write endpoint, including delete; treat this as a real gap, not a formality, before this is
+ever exposed outside a trusted network. The Groups screen is also fully mock — `user_groups`/
+`user_group` tables exist but have no FK link to
 `activity_member`, so there is nothing real to wire up.
 
 ## Run / dev commands
@@ -109,8 +115,12 @@ Endpoints: `GET /api/members` (`?status=all|active|inactive`), `GET /api/members
 location_value, component_ids}` — creates the login + all three grant rows in one transaction; 409 if
 the cadre already has one), `PUT /api/members/{id}/role` (`{user_type_id}`), `PUT
 /api/members/{id}/level` (`{user_level_id, location_value}`), `PUT /api/members/{id}/active`
-(`{is_active: "Y"|"N"}`), `DELETE /api/members/{id}` (soft-delete — cascades `is_active`/`is_valid`
-`= 'N'` across every grant table, not just `activity_member.is_acitve`, unlike plain deactivate).
+(`{is_active: "Y"|"N"}`), `POST /api/members/{id}/components` (`{component_id}` — grants one personal
+component, reactivating a prior revoked grant for the same component instead of inserting a
+duplicate), `DELETE /api/members/{id}/components/{component_id}` (revokes one — flips `is_valid='N'`,
+same reactivate-on-re-add semantics), `DELETE /api/members/{id}` (soft-delete — cascades
+`is_active`/`is_valid` `= 'N'` across every grant table, not just `activity_member.is_acitve`, unlike
+plain deactivate).
 
 `POST /api/members` treats `activity_member_id = 581` as a reserved/placeholder record and ignores
 it when checking whether a cadre already has a login — this came from the query the endpoint was
@@ -131,8 +141,10 @@ that record actually is.
 - `App.jsx` is a single large file containing the whole console: lookups are fetched once at startup
   into module-scope `let USER_TYPES/USER_LEVELS/COMPONENTS` (avoids prop-drilling), then screens are
   plain functions switched on a `screen` state string inside `AdminConsole()` — `Overview`,
-  `UsersScreen`, `DetailScreen` (real delete via the "Delete login" button; everything else on this
-  screen is still the staged client-side mock draft), `GroupsScreen`/`GroupEditor` (mock), plus
+  `UsersScreen`, `DetailScreen` (real delete via the "Delete login" button; role, active status,
+  access scope and personal component grants are staged in the draft and hit the real backend only on
+  "Save changes" — see `saveMember` in `AdminConsole`; Mobile No on that same draft stays client-side
+  mock since `tdp_cadre` isn't writable), `GroupsScreen`/`GroupEditor` (mock), plus
   `OtpModal` and `CreateScreen` (its existing-login panel calls the real role/active PUT endpoints;
   its "not found" step creates a real login via `POST /api/members` when a cadre was matched by MID,
   or falls back to the pre-existing mock when there's no cadre to link to). Small shared UI atoms

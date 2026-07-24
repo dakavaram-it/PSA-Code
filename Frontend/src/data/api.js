@@ -65,6 +65,36 @@ export const updateMemberLevel = (memberId, userLevelId, locationValue) =>
     body: JSON.stringify({ user_level_id: userLevelId, location_value: locationValue }),
   }).then(jsonOrThrow);
 
+// Grants a personal component; returns the updated member row.
+export const addMemberComponent = (memberId, componentId) =>
+  fetch(`${BASE}/members/${memberId}/components`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ component_id: componentId }),
+  }).then(jsonOrThrow);
+
+// Revokes a personal component; returns the updated member row.
+export const removeMemberComponent = (memberId, componentId) =>
+  fetch(`${BASE}/members/${memberId}/components/${componentId}`, { method: 'DELETE' }).then(jsonOrThrow);
+
+// Creates a brand-new tdp_cadre record (+ its first login_otp_details row) —
+// Create Membership ID → manual path, no existing cadre matched. There's no
+// SMS gateway wired into the backend, so the OTP comes back in the response
+// for the admin UI to display rather than being texted. Returns
+// { tdp_cadre_id, membership_id, first_name, last_name, mobile_no, otp } —
+// membership_id may differ from what was requested if that MID was taken
+// (the backend reassigns a free one rather than failing).
+export const createCadre = (payload) =>
+  fetch(`${BASE}/cadre`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      membership_id: payload.membership_id || '',
+      name: payload.name,
+      mobile_no: payload.mobile_no,
+    }),
+  }).then(jsonOrThrow);
+
 // Creates a login (+ role/level/component grants) for a cadre with no
 // activity_member row yet. Throws (status 409) if one already exists.
 export const createMember = (payload) =>

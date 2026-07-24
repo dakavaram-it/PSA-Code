@@ -2,10 +2,10 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   LayoutDashboard, Users, ClipboardList, Search, Plus,
   ChevronLeft, Eye, KeyRound, X, Check, ShieldCheck, MapPin, Layers,
-  AlertTriangle, UserCheck, UserX, FolderTree, Save, RotateCcw, Copy, UserPlus,
+  AlertTriangle, UserCheck, UserX, Save, RotateCcw, Copy, UserPlus,
   IdCard, Smartphone, Pencil,
 } from "lucide-react";
-import { getMembers, getUserTypes, getUserLevels, getComponents, getConstituencies, getParliaments, lookupCadre, lookupCadreByMobile, updateMemberRole, updateMemberActive } from "./data/api.js";
+import { getMembers, getUserTypes, getUserLevels, getComponents, getConstituencies, getParliaments, lookupCadre, lookupCadreByMobile, updateMemberRole, updateMemberActive, updateMemberLevel, addMemberComponent, removeMemberComponent, createCadre } from "./data/api.js";
 import { cn } from "./lib/utils.js";
 
 /*
@@ -46,29 +46,9 @@ let LIVE_PARLIAMENTS = [];
 const STANDARD_BUNDLE = [82, 94, 129, 131];
 const componentLabel = (c) => c.display || c.actual || c.name;
 
-// --- user_groups reimagined as a working (mock) permission model. -----------
-// REQUIRES two tables that do NOT exist in the current schema [§3.11-3.12]:
-//   user_group_member(user_group_id, activity_member_id)
-//   user_group_component(user_group_id, component_id)
-// Everything group-related below is front-end mock state until those exist.
-const INITIAL_GROUPS = [
-  { user_group_id: 1, notes: "ADMIN_GROUP", component_ids: [82, 94, 129, 131, 45, 117] },
-  { user_group_id: 2, notes: "TDP_MLA-GROUP", component_ids: [82, 94, 129, 131] },
-  { user_group_id: 3, notes: "OBSERVER_GROUP", component_ids: [82, 94, 129, 131] },
-  { user_group_id: 4, notes: "PROGRAM_COMMITTEE_GROUP", component_ids: [129, 131, 133, 113, 116] },
-  { user_group_id: 5, notes: "DATA_ENTRY", component_ids: [45, 103, 110] },
-  { user_group_id: 6, notes: "FIELD_SURVEY_GROUP", component_ids: [103, 110, 45] },
-];
-
-// Effective components = group-inherited ∪ personal. Returns tagged list.
-function effectiveComponents(member, groups) {
-  const grp = member.group_id ? groups.find((g) => g.user_group_id === member.group_id) : null;
-  const inherited = new Set(grp ? grp.component_ids : []);
-  const personal = new Set(member.component_ids);
-  const all = new Set([...inherited, ...personal]);
-  return [...all].sort((a, b) => a - b).map((id) => ({
+function effectiveComponents(member) {
+  return [...member.component_ids].sort((a, b) => a - b).map((id) => ({
     id, component: COMPONENTS.find((c) => c.id === id),
-    inherited: inherited.has(id), personal: personal.has(id),
   })).filter((x) => x.component);
 }
 
@@ -131,14 +111,12 @@ const CAT = {
 
 // ---------------------------------------------------------------------------
 export default function AdminConsole() {
-  const [screen, setScreen] = useState("dashboard"); // dashboard | users | detail | groups | create
+  const [screen, setScreen] = useState("dashboard"); // dashboard | users | detail | create
   const [members, setMembers] = useState([]);       // loaded live from the API
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
-  const [groups, setGroups] = useState(INITIAL_GROUPS);
   const [activeId, setActiveId] = useState(null);
   const [returnScreen, setReturnScreen] = useState("users"); // where Detail's Back button should go
-  const [activeGroupId, setActiveGroupId] = useState(null);
   const [filters, setFilters] = useState({ q: "", status: "all", role: "all", level: "all" });
   const [selected, setSelected] = useState(() => new Set());
   const [otpModal, setOtpModal] = useState(null); // { member, code }
@@ -186,14 +164,43 @@ export default function AdminConsole() {
     });
   }, [members, filters]);
 
-  function saveMember(edited) {
-    setMembers((ms) => ms.map((m) => m.activity_member_id === edited.activity_member_id ? edited : m));
-    flash(`Changes saved for ${edited.member_name}`);
+  // Detail screen's "Save changes" — role, status, access scope and personal
+  // component grants are all staged in the draft (Mobile No is the only
+  // field left that's genuinely client-side, since it lives on tdp_cadre and
+  // there's no write endpoint for that table). This is the one moment any of
+  // them hit the real backend. Only what actually changed gets written, in
+  // sequence, so a partial failure doesn't clobber the rest.
+  async function saveMember(edited) {
+    const original = members.find((m) => m.activity_member_id === edited.activity_member_id);
+    let updated = original;
+    if (edited.role_id !== original.role_id) {
+      updated = await updateMemberRole(edited.activity_member_id, edited.role_id);
+    }
+    if (edited.is_acitve !== original.is_acitve) {
+      updated = await updateMemberActive(edited.activity_member_id, edited.is_acitve);
+    }
+    if (edited.level_id !== original.level_id || edited.location_value !== original.location_value) {
+      const locationValue = edited.location_value !== "" ? edited.location_value : null;
+      updated = await updateMemberLevel(edited.activity_member_id, edited.level_id, locationValue);
+    }
+    const added = edited.component_ids.filter((id) => !original.component_ids.includes(id));
+    const removed = original.component_ids.filter((id) => !edited.component_ids.includes(id));
+    for (const componentId of added) {
+      updated = await addMemberComponent(edited.activity_member_id, componentId);
+    }
+    for (const componentId of removed) {
+      updated = await removeMemberComponent(edited.activity_member_id, componentId);
+    }
+    const merged = { ...updated, mobile_no: edited.mobile_no };
+    setMembers((ms) => ms.map((m) => m.activity_member_id === merged.activity_member_id ? merged : m));
+    flash("Changes have been saved");
+    return merged;
   }
   function openOtp(m) { setOtpModal({ member: m, code: generateOtp() }); }
   function openDetail(id ,from = screen) { setActiveId(id); setReturnScreen(from); setScreen("detail"); }
-  // The only two writes in this app that hit the real DB (Backend/main.py's
-  // two PUT endpoints) — everything else here is client-side mock state.
+  // Used by the New Login screen's existing-login panel, which has no
+  // "Save changes" moment — it writes straight through on click, same as
+  // the Detail screen used to before role/status/scope became staged there.
   async function changeMemberRole(id, role) {
     const updated = await updateMemberRole(id, role.id);
     setMembers((ms) => ms.map((m) => m.activity_member_id === id ? updated : m));
@@ -206,7 +213,8 @@ export default function AdminConsole() {
     flash(`${updated.member_name} ${nextActive === "Y" ? "activated" : "deactivated"}`);
     return updated;
   }
-  // Location has no backend write endpoint yet — mock only, like the rest of the app.
+  // Still mock — used only by the New Login screen's existing-login panel,
+  // which has no "commit" moment separate from picking the location.
   function changeMemberLocation(id, patch) {
     const updated = { ...members.find((m) => m.activity_member_id === id), ...patch };
     setMembers((ms) => ms.map((m) => m.activity_member_id === id ? updated : m));
@@ -217,22 +225,6 @@ export default function AdminConsole() {
     setMembers((ms) => ms.map((m) => selected.has(m.activity_member_id) ? { ...m, is_acitve: flag } : m));
     flash(`${selected.size} login${selected.size > 1 ? "s" : ""} ${flag === "Y" ? "activated" : "deactivated"}`);
     setSelected(new Set());
-  }
-  function saveGroup(g) {
-    setGroups((gs) => {
-      const exists = gs.some((x) => x.user_group_id === g.user_group_id);
-      return exists ? gs.map((x) => x.user_group_id === g.user_group_id ? g : x) : [...gs, g];
-    });
-    flash(`Group "${g.notes}" saved`);
-  }
-  function deleteGroup(id) {
-    setGroups((gs) => gs.filter((g) => g.user_group_id !== id));
-    setMembers((ms) => ms.map((m) => m.group_id === id ? { ...m, group_id: null } : m));
-    setActiveGroupId(null);
-    flash("Group deleted");
-  }
-  function setMemberGroup(memberId, groupId) {
-    setMembers((ms) => ms.map((m) => m.activity_member_id === memberId ? { ...m, group_id: groupId } : m));
   }
   function createMember(payload) {
     const role = USER_TYPES.find((r) => r.id === payload.role_id);
@@ -245,7 +237,6 @@ export default function AdminConsole() {
       role_id: role.id, role_name: role.type, role_short: role.short,
       level_id: lvl.id, level_name: lvl.name, location_value: payload.location,
       component_ids: [...payload.components].sort((a, b) => a - b),
-      group_id: payload.group_id || null,
     };
     setMembers((ms) => [nm, ...ms]);
     setScreen("users");
@@ -255,10 +246,9 @@ export default function AdminConsole() {
 
   const NAV = [
     { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
-    { key: "groups", label: "Groups", icon: <FolderTree size={18} />, badge: groups.length },
   ];
-  const CRUMB = { dashboard: "Console", users: "Access management", detail: "Access management", groups: "Reference", create: "Access management" };
-  const TITLE = { dashboard: "Dashboard", users: "Login accounts", detail: activeUser?.member_name || "Login", groups: "Group catalogue", create: "New login" };
+  const CRUMB = { dashboard: "Console", users: "Access management", detail: "Access management", create: "Access management" };
+  const TITLE = { dashboard: "Dashboard", users: "Login accounts", detail: activeUser?.member_name || "Login", create: "New login" };
 
   if (loading || loadError) {
     return (
@@ -350,17 +340,12 @@ export default function AdminConsole() {
               onReset={openOtp} onBack={() => setScreen("dashboard")} />
           )}
           {screen === "detail" && activeUser && (
-            <DetailScreen key={activeUser.activity_member_id} u={activeUser} groups={groups}
-              // onBack={() => setScreen("users")} onSave={saveMember} onReset={() => openOtp(activeUser)} />
+            <DetailScreen key={activeUser.activity_member_id} u={activeUser}
               onBack={() => setScreen(returnScreen)} onSave={saveMember} onReset={() => openOtp(activeUser)}
              backLabel={returnScreen === "dashboard" ? "Back to dashboard" : "Back to logins"} />
           )}
-          {screen === "groups" && (
-            <GroupsScreen groups={groups} members={members} activeGroupId={activeGroupId}
-              setActiveGroupId={setActiveGroupId} onSaveGroup={saveGroup} onDeleteGroup={deleteGroup} onSetMemberGroup={setMemberGroup} />
-          )}
           {screen === "create" && (
-            <CreateScreen groups={groups} members={members}
+            <CreateScreen members={members}
               onBack={() => setScreen("dashboard")} onCreate={createMember} onOtp={openOtp}
               onChangeRole={changeMemberRole} onToggleActive={toggleMemberActive} onChangeLocation={changeMemberLocation} />
           )}
@@ -803,40 +788,62 @@ function UsersScreen({ rows, total, filters, setFilters, selected, setSelected, 
 }
 
 // --- DETAIL (draft + Save) --------------------------------------------------
-function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to logins"}) {
+function DetailScreen({ u, onBack, onSave, onReset, backLabel = "Back to logins"}) {
   const [draft, setDraft] = useState(u);
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [scopeEdit, setScopeEdit] = useState(false);
   const [locEdit, setLocEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
   const dirty = JSON.stringify(draft) !== JSON.stringify(u);
 
-  const grp = draft.group_id ? groups.find((g) => g.user_group_id === draft.group_id) : null;
-  const inheritedIds = new Set(grp ? grp.component_ids : []);
-  const effective = effectiveComponents(draft, groups);
-  const addable = COMPONENTS.filter((c) => !inheritedIds.has(c.id) && !draft.component_ids.includes(c.id));
+  const effective = effectiveComponents(draft);
+  const addable = COMPONENTS.filter((c) => !draft.component_ids.includes(c.id));
   const locList = draft.level_id === 5 ? LIVE_CONSTITUENCIES : draft.level_id === 4 ? LIVE_PARLIAMENTS : [{ id: draft.location_value ?? "", name: "Andhra Pradesh" }];
 
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }));
-  const setRole = (id) => { const r = USER_TYPES.find((x) => x.id === id); set({ role_id: id, role_name: r.type, role_short: r.short }); setRoleMenuOpen(false); };
+
+  // Role, active status and access scope are all staged into `draft`, same as
+  // Mobile No and components — nothing hits the real backend
+  // (PUT /api/members/{id}/role|active|level) until "Save changes" is
+  // clicked, at which point onSave diffs draft against u and writes only
+  // what actually changed.
+  function pickRole(id) {
+    const r = USER_TYPES.find((x) => x.id === id);
+    setRoleMenuOpen(false);
+    set({ role_id: r.id, role_name: r.type, role_short: r.short });
+  }
+
+  function toggleActiveDraft() {
+    set({ is_acitve: draft.is_acitve === "Y" ? "N" : "Y" });
+  }
+
   const setLevel = (id) => {
     const l = USER_LEVELS.find((x) => x.id === id);
     set({ level_id: id, level_name: l.name, location_value: "", location_name: "", locations: [] });
   };
-  // Local-only, staged multi-select: toggles a location in/out of draft.locations.
-  // Not wired to a write endpoint yet — "Save changes" still only persists the
-  // single location_value/location_name pair (mirrored from the first entry here).
-  const toggleLocation = (loc) => {
-    const current = draft.locations || [];
-    const exists = current.some((x) => x.location_value === loc.id);
-    const next = exists
-      ? current.filter((x) => x.location_value !== loc.id)
-      : [...current, { level_id: draft.level_id, level_name: draft.level_name, location_value: loc.id, location_name: loc.name }];
-    set({ locations: next, location_value: next[0]?.location_value ?? "", location_name: next[0]?.location_name ?? "" });
+  // Single-select — picking a location replaces any previous pick rather than
+  // adding to it, since the backend can only hold one active scope per commit
+  // (it deactivates every prior one first).
+  const selectLocation = (loc) => {
+    set({ locations: [{ level_id: draft.level_id, level_name: draft.level_name, location_value: loc.id, location_name: loc.name }],
+          location_value: loc.id, location_name: loc.name });
   };
   const addPersonal = (id) => set({ component_ids: [...draft.component_ids, id].sort((a, b) => a - b) });
   const removePersonal = (id) => set({ component_ids: draft.component_ids.filter((x) => x !== id) });
+
+  async function handleSave() {
+    setSaving(true); setErr("");
+    try {
+      await onSave(draft);
+    } catch {
+      setErr("Could not save changes — check the backend is reachable and try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div>
@@ -846,8 +853,8 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
         </button>
         <div className="flex items-center gap-2.5">
           {dirty && <span className="flex items-center gap-1.5 text-xs text-amber-600"><AlertTriangle size={13} /> Unsaved changes</span>}
-          <button disabled={!dirty} onClick={() => setDraft(u)} className={SECONDARY}><RotateCcw size={14} /> Discard</button>
-          <button disabled={!dirty} onClick={() => onSave(draft)} className={PRIMARY}><Save size={14} /> Save changes</button>
+          <button disabled={!dirty || saving} onClick={() => setDraft(u)} className={SECONDARY}><RotateCcw size={14} /> Discard</button>
+          <button disabled={!dirty || saving} onClick={handleSave} className={PRIMARY}><Save size={14} /> {saving ? "Saving…" : "Save changes"}</button>
         </div>
       </div>
 
@@ -865,17 +872,19 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
             <span className={LABEL}>Role:</span>
             <RoleBadge label={draft.role_name || "No role"} />
             <div className="relative">
-              <button onClick={() => setRoleMenuOpen((v) => !v)} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}><Plus size={12} /> Add role</button>
+              <button onClick={() => setRoleMenuOpen((v) => !v)} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}>
+                <Plus size={12} /> Add role
+              </button>
               {roleMenuOpen && (
-                <div className="absolute right-0 top-full z-10 mt-1 w-44 overflow-hidden rounded-xl border border-gray-100 bg-white py-1 shadow-xl">
+                <div className="absolute right-0 top-full z-10 mt-1 w-44 max-h-56 overflow-y-auto rounded-xl border border-gray-100 bg-white py-1 shadow-xl">
                   {USER_TYPES.map((r) => (
-                    <button key={r.id} onClick={() => setRole(r.id)} className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-yellow-50">{r.type}</button>
+                    <button key={r.id} onClick={() => pickRole(r.id)} className="block w-full px-3 py-1.5 text-left text-xs text-gray-700 hover:bg-yellow-50">{r.type}</button>
                   ))}
                 </div>
               )}
             </div>
             <StatusPill active={draft.is_acitve === "Y"} />
-            <button onClick={() => set({ is_acitve: draft.is_acitve === "Y" ? "N" : "Y" })} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}>
+            <button onClick={toggleActiveDraft} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}>
               {draft.is_acitve === "Y" ? "Deactivate" : "Activate"}
             </button>
             <button onClick={onReset} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}><KeyRound size={12} /> Reset OTP</button>
@@ -920,22 +929,17 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
                     const checked = (draft.locations || []).some((x) => x.location_value === l.id);
                     return (
                       <label key={l.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-gray-700 hover:bg-yellow-50">
-                        <input type="checkbox" checked={checked} onChange={() => toggleLocation(l)} className="h-3.5 w-3.5 accent-yellow-600" />
+                        <input type="radio" name="detail-location" checked={checked} onChange={() => selectLocation(l)} className="h-3.5 w-3.5 accent-yellow-600" />
                         {l.name}
                       </label>
                     );
                   })}
-                  <button onClick={() => setLocEdit(false)} className="mt-1 w-full rounded-lg bg-yellow-50 px-2 py-1.5 text-center text-xs font-medium text-yellow-700 hover:bg-yellow-100">Done</button>
+                  <button onClick={() => setLocEdit(false)} disabled={!draft.level_id} className="mt-1 w-full rounded-lg bg-yellow-50 px-2 py-1.5 text-center text-xs font-medium text-yellow-700 hover:bg-yellow-100 disabled:opacity-50">
+                    Done
+                  </button>
                 </div>
               )}
             </div>
-          </FieldInline>
-          <FieldInline label="Group">
-            <select value={draft.group_id || ""} onChange={(e) => set({ group_id: e.target.value ? +e.target.value : null })}
-              className="rounded-lg border border-gray-200 px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-200 focus:border-yellow-400">
-              <option value="">No group</option>
-              {groups.map((g) => <option key={g.user_group_id} value={g.user_group_id}>{g.notes}</option>)}
-            </select>
           </FieldInline>
           <HKV k="Cadre ID" v={draft.tdp_cadre_id ? `#${draft.tdp_cadre_id}` : "unresolved"} />
           <HKV k="User ID" v={`#${draft.activity_member_id}`} />
@@ -952,43 +956,31 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
             </div>
           </div>
         )}
-        {dirty && <div className="mt-4 text-[11px] text-gray-400">Changes here are staged — click "Save changes" above to apply them.</div>}
+        {err && <div className="mt-4"><ErrLine>{err}</ErrLine></div>}
+        {dirty && <div className="mt-4 text-[11px] text-gray-400">All changes are staged — click "Save changes" above to apply them.</div>}
       </Card>
 
       <div className="mt-5 flex flex-col gap-5">
         <Card className="p-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <SectionTitle icon={<Layers size={14} />}>Effective access</SectionTitle>
-              {grp && <span className="flex items-center gap-1.5 rounded-full bg-yellow-100 px-2.5 py-0.5 text-[11px] font-medium text-yellow-700"><FolderTree size={11} /> {grp.notes}</span>}
-            </div>
+            <SectionTitle icon={<Layers size={14} />}>Effective access</SectionTitle>
             <button onClick={() => setAccessOpen((v) => !v)} className={cn(SECONDARY, "px-3 py-1.5 text-[11.5px]")}>
               <Layers size={12} /> Access: {effective.length}
             </button>
           </div>
           {accessOpen && (
-            <>
-              <div className="mt-3.5 divide-y divide-gray-100">
-                {effective.length === 0 && <div className="py-3 text-sm text-amber-600">No dashboards assigned — this account opens to an empty view.</div>}
-                {effective.map(({ id, component, inherited, personal }) => {
-                  const lockedOnly = inherited && !personal;
-                  return (
-                    <div key={id} className="flex items-center justify-between gap-3 py-2.5">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        {inherited
-                          ? <span title="Inherited from group" className="flex-none rounded bg-yellow-100 px-1.5 py-px text-[9px] font-semibold tracking-wide text-yellow-700">GROUP</span>
-                          : <Check size={14} className="flex-none text-yellow-700" />}
-                        <span className={cn("truncate text-sm", lockedOnly ? "text-gray-500" : "text-gray-800")}>{componentLabel(component)}</span>
-                      </div>
-                      {personal && !inherited && (
-                        <button onClick={() => removePersonal(id)} title="Remove personal grant" className="flex-none text-gray-400 hover:text-red-500"><X size={14} /></button>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {grp && <div className="mt-2.5 text-[11px] text-gray-400">Grey = inherited from group (change on the group, not here). Purple = personal, removable.</div>}
-            </>
+            <div className="mt-3.5 divide-y divide-gray-100">
+              {effective.length === 0 && <div className="py-3 text-sm text-amber-600">No dashboards assigned — this account opens to an empty view.</div>}
+              {effective.map(({ id, component }) => (
+                <div key={id} className="flex items-center justify-between gap-3 py-2.5">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <Check size={14} className="flex-none text-yellow-700" />
+                    <span className="truncate text-sm text-gray-800">{componentLabel(component)}</span>
+                  </div>
+                  <button onClick={() => removePersonal(id)} title="Remove component" className="flex-none text-gray-400 hover:text-red-500"><X size={14} /></button>
+                </div>
+              ))}
+            </div>
           )}
         </Card>
 
@@ -1017,144 +1009,6 @@ function DetailScreen({ u, groups, onBack, onSave, onReset ,backLabel = "Back to
           <div className="mt-3.5 grid grid-cols-2 gap-3 text-sm">
             <KV k="Created" v={fmtDateTime(u.inserted_time)} />
             <KV k="Last updated by" v={u.updated_by ? `#${u.updated_by}` : "—"} mono />
-          </div>
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-// --- GROUPS (working mock CRUD) ---------------------------------------------
-function GroupsScreen({ groups, members, activeGroupId, setActiveGroupId, onSaveGroup, onDeleteGroup, onSetMemberGroup }) {
-  const active = groups.find((g) => g.user_group_id === activeGroupId) || null;
-  if (active) {
-    return <GroupEditor group={active} members={members} groups={groups}
-      onBack={() => setActiveGroupId(null)} onSave={onSaveGroup} onDelete={onDeleteGroup} onSetMemberGroup={onSetMemberGroup} />;
-  }
-  const nextId = () => (groups.reduce((m, g) => Math.max(m, g.user_group_id), 0) + 1);
-  const count = (gid) => members.filter((m) => m.group_id === gid).length;
-
-  return (
-    <div className="flex flex-col gap-4">
-      <Card className="flex items-start gap-3 border-l-4 border-l-amber-400 p-4">
-        <AlertTriangle size={16} className="mt-0.5 flex-none text-amber-500" />
-        <div className="text-[12.5px] leading-relaxed text-gray-500">
-          <strong className="text-gray-800">Requires two new tables.</strong> Groups here assign components and members, but the current schema has no <code className="text-yellow-600">user_group_member</code> or <code className="text-yellow-600">user_group_component</code> table. This is a working mock — persistence needs those tables built first.
-        </div>
-      </Card>
-
-      <div className="flex justify-end">
-        <button onClick={() => { onSaveGroup({ user_group_id: nextId(), notes: "NEW_GROUP", component_ids: [] }); setActiveGroupId(nextId()); }} className={PRIMARY}>
-          <Plus size={16} /> Create group
-        </button>
-      </div>
-
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4">
-        {groups.map((g) => (
-          <Card key={g.user_group_id} className={cn(CARD_HOVER, "cursor-pointer p-5")}>
-            <div onClick={() => setActiveGroupId(g.user_group_id)}>
-              <div className="flex items-start justify-between">
-                <span className="grid h-9 w-9 place-items-center rounded-xl bg-yellow-50 text-yellow-700"><FolderTree size={16} /></span>
-                <span className="font-mono text-[10.5px] text-gray-400">#{g.user_group_id}</span>
-              </div>
-              <div className="mt-3 break-words font-head text-sm font-semibold">{g.notes}</div>
-              <div className="mt-3 flex gap-4">
-                <div><div className="font-head text-lg font-bold">{count(g.user_group_id)}</div><div className="text-[10px] uppercase tracking-wide text-gray-400">Members</div></div>
-                <div><div className="font-head text-lg font-bold">{g.component_ids.length}</div><div className="text-[10px] uppercase tracking-wide text-gray-400">Components</div></div>
-              </div>
-            </div>
-            <button onClick={() => setActiveGroupId(g.user_group_id)} className={cn(SECONDARY, "mt-4 w-full")}>Manage</button>
-          </Card>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function GroupEditor({ group, members, groups, onBack, onSave, onDelete, onSetMemberGroup }) {
-  const [draft, setDraft] = useState(group);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(group);
-  const [memberQuery, setMemberQuery] = useState("");
-
-  const inGroup = members.filter((m) => m.group_id === group.user_group_id);
-  const q = memberQuery.trim().toLowerCase();
-  const candidates = q
-    ? members.filter((m) => m.group_id !== group.user_group_id &&
-        `${m.member_name} ${m.membership_id || ""}`.toLowerCase().includes(q)).slice(0, 6)
-    : [];
-  const toggleComp = (id) => setDraft((d) => ({
-    ...d, component_ids: d.component_ids.includes(id) ? d.component_ids.filter((x) => x !== id) : [...d.component_ids, id].sort((a, b) => a - b),
-  }));
-
-  return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-sm text-gray-500 transition-colors hover:text-yellow-600">
-          <ChevronLeft size={16} /> All groups
-        </button>
-        <div className="flex items-center gap-2.5">
-          <button onClick={() => onDelete(group.user_group_id)} className="rounded-xl border border-red-200 px-3.5 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50">Delete group</button>
-          {dirty && <span className="flex items-center gap-1.5 text-xs text-amber-600"><AlertTriangle size={13} /> Unsaved</span>}
-          <button disabled={!dirty} onClick={() => onSave(draft)} className={PRIMARY}><Save size={14} /> Save group</button>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
-        <div className="flex flex-col gap-5">
-          <Card className="p-6">
-            <label className="flex flex-col gap-1.5">
-              <span className={LABEL}>Group name</span>
-              <input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} className={cn(INPUT, "font-head font-semibold")} />
-            </label>
-          </Card>
-
-          <Card className="p-6">
-            <SectionTitle icon={<Layers size={14} />}>What this group can view ({draft.component_ids.length})</SectionTitle>
-            <div className="my-2.5 text-xs text-gray-500">Every member inherits these. They can still be given extra components individually.</div>
-            <div className="flex flex-wrap gap-2">
-              {COMPONENTS.map((c) => {
-                const on = draft.component_ids.includes(c.id);
-                return (
-                  <button key={c.id} onClick={() => toggleComp(c.id)} className={cn(
-                    "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px] transition-colors",
-                    on ? "border-yellow-300 bg-yellow-50 text-gray-800"
-                       : "border-gray-200 text-gray-500 hover:border-yellow-300",
-                  )}>
-                    {on ? <Check size={12} className="text-yellow-700" /> : <Plus size={12} />} {componentLabel(c)}
-                  </button>
-                );
-              })}
-            </div>
-          </Card>
-        </div>
-
-        <Card className="p-6">
-          <SectionTitle icon={<Users size={14} />}>Members ({inGroup.length})</SectionTitle>
-          <div className="group relative my-3">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 transition-colors group-focus-within:text-yellow-700" />
-            <input value={memberQuery} onChange={(e) => setMemberQuery(e.target.value)} placeholder="Search a login to add…" className={cn(INPUT, "pl-9")} />
-          </div>
-          {candidates.length > 0 && (
-            <div className="mb-3 overflow-hidden rounded-xl border border-gray-200">
-              {candidates.map((m) => (
-                <div key={m.activity_member_id} className="flex items-center justify-between border-b border-gray-100 px-3 py-2 last:border-b-0">
-                  <span className="text-sm">{m.member_name} <span className="text-[11px] text-gray-400">{m.membership_id || "no MID"}{m.group_id ? " · in another group" : ""}</span></span>
-                  <button onClick={() => { onSetMemberGroup(m.activity_member_id, group.user_group_id); setMemberQuery(""); }} className="rounded-lg border border-yellow-300 px-2.5 py-1 text-xs font-medium text-yellow-600 transition-colors hover:bg-yellow-50">Add</button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="flex flex-col gap-2">
-            {inGroup.length === 0 && <span className="text-[12.5px] text-gray-400">No members yet. Search above to add logins.</span>}
-            {inGroup.map((m) => (
-              <div key={m.activity_member_id} className="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2">
-                <div className="flex items-center gap-2.5">
-                  <Avatar name={m.member_name} imageUrl={m.image_url} className="h-7 w-7 rounded-full bg-yellow-100" textClassName="font-head text-[10px] font-semibold text-yellow-600" />
-                  <span className="text-sm">{m.member_name}<span className="text-[11px] text-gray-400"> · {m.role_name}</span></span>
-                </div>
-                <button onClick={() => onSetMemberGroup(m.activity_member_id, null)} title="Remove from group" className="flex text-gray-400 hover:text-red-500"><X size={15} /></button>
-              </div>
-            ))}
           </div>
         </Card>
       </div>
@@ -1208,7 +1062,7 @@ function OtpModal({ data, onRegenerate, onClose, onSent }) {
 // If the entered membership ID or mobile number already has a login, we don't
 // let a duplicate be created — the found-login panel below lets the admin
 // change its role, activate/deactivate it and review its access inline.
-function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, onToggleActive, onChangeLocation }) {
+function CreateScreen({ members, onBack, onCreate, onOtp, onChangeRole, onToggleActive, onChangeLocation }) {
   const [step, setStep] = useState(1);
   const [lookupMode, setLookupMode] = useState(null); // null | "mid" | "mobile"
   const [mid, setMid] = useState("");
@@ -1219,10 +1073,11 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [otp, setOtp] = useState("");
+  const [cadreCreated, setCadreCreated] = useState(false); // true once Send OTP has created a real tdp_cadre row
+  const [sendingOtp, setSendingOtp] = useState(false);
   const [roleId, setRoleId] = useState(12);
   const [levelId, setLevelId] = useState(5);
   const [location, setLocation] = useState("");
-  const [groupId, setGroupId] = useState(null);
   const [comps, setComps] = useState([...STANDARD_BUNDLE]);
   const [err, setErr] = useState("");
   const [looking, setLooking] = useState(false);
@@ -1237,8 +1092,6 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
 
   const locList = levelId === 5 ? CONSTITUENCIES : levelId === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
   const pendingLocList = pendingLevelId === 5 ? CONSTITUENCIES : pendingLevelId === 4 ? PARLIAMENTS : ["Andhra Pradesh"];
-  const grp = groupId ? groups.find((g) => g.user_group_id === groupId) : null;
-  const inheritedIds = new Set(grp ? grp.component_ids : []);
 
   function switchMode(mode) {
     setLookupMode(mode); setErr(""); setMobileCandidates([]); lookedUpRef.current = "";
@@ -1248,7 +1101,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
   // step-2 manual-entry form — same path the "not found" case already uses,
   // just without having searched for anything first.
   function startManualCreate() {
-    setLookupMode("manual"); setCadre(null); setNotFound(true);
+    setLookupMode("manual"); setCadre(null); setNotFound(true); setCadreCreated(false);
     setName(""); setMobile(""); setMid(""); setOtp(""); setMobileCandidates([]);
     setErr(""); lookedUpRef.current = "";
     setStep(2);
@@ -1274,7 +1127,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
         level_name: c.LOCLEVEL, location_value: c.LOCVALUE,
         location_name: c.LOCATION, image_url: c.IMAGE,
       });
-      setCadre(null); setNotFound(false);
+      setCadre(null); setNotFound(false); setCadreCreated(false);
       setStep(2);
       return;
     }
@@ -1289,7 +1142,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
       gender: null, constituency_id: null, image_url: c.IMAGE,
     };
     if (!found.image_url) found.image_url = c.IMAGE;
-    setCadre(found); setNotFound(false);
+    setCadre(found); setNotFound(false); setCadreCreated(false);
     setName(`${found.first_name || ""} ${found.last_name || ""}`.trim());
     setMobile(found.mobile_no || "");
     setStep(2);
@@ -1309,7 +1162,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
       // backend, so strip the "#" before comparing to the raw digits typed.
       const existing = members.find((m) => (m.membership_id || "").replace(/^#/, "") === q);
       if (existing) {
-        setExistingMember(existing); setCadre(null); setNotFound(false);
+        setExistingMember(existing); setCadre(null); setNotFound(false); setCadreCreated(false);
         setStep(2);
         return;
       }
@@ -1317,11 +1170,11 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
       const found = await lookupCadre(q);
       setLooking(false);
       if (found) {
-        setCadre(found); setNotFound(false);
+        setCadre(found); setNotFound(false); setCadreCreated(false);
         setName(`${found.first_name || ""} ${found.last_name || ""}`.trim());
         setMobile(found.mobile_no || "");
       } else {
-        setCadre(null); setNotFound(true); setName(""); setMobile("");
+        setCadre(null); setNotFound(true); setCadreCreated(false); setName(""); setMobile("");
       }
       setStep(2);
       return;
@@ -1341,7 +1194,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
     }
     setLooking(false);
     if (candidates.length === 0) {
-      setCadre(null); setNotFound(true); setName(""); setMobile(q); setMobileCandidates([]);
+      setCadre(null); setNotFound(true); setCadreCreated(false); setName(""); setMobile(q); setMobileCandidates([]);
       setStep(2);
       return;
     }
@@ -1370,8 +1223,8 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
   }, [mid, lookupMobile, lookupMode, step]);
 
   function resetLookup() {
-    setExistingMember(null); setCadre(null); setNotFound(false); setMobileCandidates([]);
-    setMid(""); setLookupMobile(""); setName(""); setMobile("");
+    setExistingMember(null); setCadre(null); setNotFound(false); setCadreCreated(false); setMobileCandidates([]);
+    setMid(""); setLookupMobile(""); setName(""); setMobile(""); setOtp("");
     setRoleMenuOpen(false); setLocationMenuOpen(false); setErr("");
     lookedUpRef.current = ""; setStep(1); setLookupMode(null);
   }
@@ -1418,15 +1271,41 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
     }
   }
 
+  const isValidMobile = (m) => /^\d{10}$/.test(m.trim());
+  const canSendOtp = !!name.trim() && !!mid.trim() && isValidMobile(mobile) && !sendingOtp;
+
+  // Manual/not-found path only: creates the real tdp_cadre + login_otp_details
+  // rows and shows the OTP (no SMS gateway wired up, so it's admin-visible
+  // here rather than texted). The "found via lookup" path's cadre never goes
+  // through this — it's already real, this only ever creates a new one.
+  async function sendOtp() {
+    setErr("");
+    if (!name.trim()) return setErr("Name is required.");
+    if (!isValidMobile(mobile)) return setErr("Enter a valid 10-digit mobile number.");
+    if (!mid.trim()) return setErr("Membership ID is required.");
+    setSendingOtp(true);
+    try {
+      const created = await createCadre({ membership_id: mid.trim(), name: name.trim(), mobile_no: mobile.trim() });
+      setCadre(created);
+      setCadreCreated(true);
+      setMid(created.membership_id);
+      setOtp(created.otp);
+    } catch {
+      setErr("Could not create the membership record — check the backend is reachable and try again.");
+    } finally {
+      setSendingOtp(false);
+    }
+  }
+
   function submit() {
     setErr("");
     if (!name.trim()) return setErr("Name is required.");
+    if (!cadre) return setErr('Click "Send OTP" to create the membership record first.');
     if (!location) return setErr("Pick a location. A missing scope value silently yields an empty dashboard.");
-    const personal = comps.filter((id) => !inheritedIds.has(id));
     const created = onCreate({
       mid: mid.trim(), tdp_cadre_id: cadre ? cadre.tdp_cadre_id : null,
       name: name.trim(), mobile: mobile.trim() || null,
-      role_id: roleId, level_id: levelId, location, group_id: groupId, components: personal,
+      role_id: roleId, level_id: levelId, location, components: comps,
     });
     if (created) onOtp(created);
   }
@@ -1633,7 +1512,16 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
 
           {step === 2 && (
             <>
-              {cadre ? (
+              {cadre && cadreCreated ? (
+                <Card className="border-l-4 border-l-green-400 p-6">
+                  <div className="mb-3 flex items-center gap-2 text-[12.5px] text-green-600"><UserCheck size={15} /> Membership created — cadre #{cadre.tdp_cadre_id}</div>
+                  <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
+                    <HKV k="Name" v={`${cadre.first_name} ${cadre.last_name || ""}`.trim()} />
+                    <HKV k="Mobile" v={cadre.mobile_no} />
+                    <HKV k="Membership ID" v={cadre.membership_id} />
+                  </div>
+                </Card>
+              ) : cadre ? (
                 <Card className="border-l-4 border-l-green-400 p-6">
                   <div className="mb-3 flex items-center gap-2 text-[12.5px] text-green-600"><UserCheck size={15} /> Member found — cadre #{cadre.tdp_cadre_id}</div>
                   <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
@@ -1648,7 +1536,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                 <Card className="border-l-4 border-l-blue-400 p-6">
                   <div className="flex items-center gap-2 text-[12.5px] text-blue-600">
                     <UserPlus size={15} />
-                    Creating a new membership. Enter the member's details below — generate a placeholder Membership ID or leave it blank if you don't have one yet.
+                    Creating a new membership. Fill in Name, Mobile and Membership ID below, then click "Send OTP" to save the record.
                   </div>
                 </Card>
               ) : (
@@ -1657,17 +1545,27 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                     <AlertTriangle size={15} />
                     {lookupMode === "mid"
                       ? `Membership ID ${mid} not found.`
-                      : `No existing login or cadre match for mobile ${lookupMobile}.`} You can create a new login by entering the details manually below — it just won't resolve to a cadre record unless you supply a valid Membership ID.
+                      : `No existing login or cadre match for mobile ${lookupMobile}.`} Fill in the details below and click "Send OTP" to create a new membership record.
                   </div>
                 </Card>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1.5"><span className={LABEL}>Name * {cadre && <span className="text-gray-400">(from cadre)</span>}</span>
+                <label className="flex flex-col gap-1.5"><span className={LABEL}>Name * {cadre && <span className="text-gray-400">{cadreCreated ? "(saved)" : "(from cadre)"}</span>}</span>
                   <input value={name} onChange={(e) => setName(e.target.value)} readOnly={!!cadre} className={cn(INPUT, cadre && "opacity-70")} placeholder="Full name" /></label>
                 <label className="flex flex-col gap-1.5"><span className={LABEL}>Mobile *</span>
                   <div className="flex gap-2">
-                    <input value={mobile} onChange={(e) => setMobile(e.target.value)} className={cn(INPUT, "flex-1")} placeholder="9xxxxxxxxx" />
-                    <button type="button" onClick={() => setOtp(generateOtp())} className={cn(SECONDARY, "whitespace-nowrap px-3")}>Generate OTP</button>
+                    <input value={mobile} onChange={(e) => setMobile(e.target.value)} readOnly={cadreCreated} className={cn(INPUT, "flex-1", cadreCreated && "opacity-70")} placeholder="9xxxxxxxxx" />
+                    {cadre && !cadreCreated ? (
+                      <button type="button" onClick={() => setOtp(generateOtp())} className={cn(SECONDARY, "whitespace-nowrap px-3")}>Generate OTP</button>
+                    ) : cadreCreated ? (
+                      <span className="flex flex-none items-center gap-1.5 whitespace-nowrap rounded-xl border border-green-200 bg-green-50 px-3 text-xs font-medium text-green-700">
+                        <Check size={12} /> OTP sent
+                      </span>
+                    ) : (
+                      <button type="button" onClick={sendOtp} disabled={!canSendOtp} title={!canSendOtp ? "Enter Name, Membership ID and a 10-digit mobile number first" : ""} className={cn(SECONDARY, "whitespace-nowrap px-3")}>
+                        {sendingOtp ? "Sending…" : "Send OTP"}
+                      </button>
+                    )}
                   </div>
                 </label>
                 {!cadre && (
@@ -1679,7 +1577,7 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
                   </label>
                 )}
                 {otp && (
-                  <label className="flex flex-col gap-1.5"><span className={LABEL}>Generated OTP</span>
+                  <label className="flex flex-col gap-1.5"><span className={LABEL}>OTP {cadreCreated && <span className="text-gray-400">(saved to the database — no SMS gateway yet, shown here for the admin to relay)</span>}</span>
                     <input value={otp} readOnly className={cn(INPUT, "opacity-70")} /></label>
                 )}
               </div>
@@ -1692,11 +1590,6 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
               <div className="grid grid-cols-2 gap-3">
                 <label className="flex flex-col gap-1.5"><span className={LABEL}>Role</span>
                   <select value={roleId} onChange={(e) => setRoleId(+e.target.value)} className={INPUT}>{USER_TYPES.map((r) => <option key={r.id} value={r.id}>{r.type}</option>)}</select></label>
-                <label className="flex flex-col gap-1.5"><span className={LABEL}>Group</span>
-                  <select value={groupId || ""} onChange={(e) => setGroupId(e.target.value ? +e.target.value : null)} className={INPUT}>
-                    <option value="">No group</option>
-                    {groups.map((g) => <option key={g.user_group_id} value={g.user_group_id}>{g.notes}</option>)}
-                  </select></label>
                 <label className="flex flex-col gap-1.5"><span className={LABEL}>Scope level</span>
                   <select value={levelId} onChange={(e) => { setLevelId(+e.target.value); setLocation(""); }} className={INPUT}>
                     {USED_LEVEL_IDS.map((lid) => { const l = USER_LEVELS.find((x) => x.id === lid); return <option key={lid} value={lid}>{l.name}</option>; })}</select></label>
@@ -1707,26 +1600,25 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
 
               <div>
                 <div className="mb-2 flex items-center justify-between">
-                  <span className={LABEL}>Components {grp && <span className="text-gray-400">— grey are inherited from {grp.notes}</span>}</span>
+                  <span className={LABEL}>Components</span>
                   <button onClick={() => setComps([...STANDARD_BUNDLE])} className="rounded-full border border-yellow-300 px-2.5 py-1 text-[11px] font-medium text-yellow-600 transition-colors hover:bg-yellow-50">Apply standard bundle</button>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {COMPONENTS.map((c) => {
-                    const inh = inheritedIds.has(c.id);
-                    const on = inh || comps.includes(c.id);
+                    const on = comps.includes(c.id);
                     return (
-                      <button key={c.id} onClick={() => !inh && toggle(c.id)} title={inh ? "Inherited from group" : ""} className={cn(
+                      <button key={c.id} onClick={() => toggle(c.id)} className={cn(
                         "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11.5px]",
-                        inh ? "cursor-default border-gray-200 bg-gray-50 text-gray-400"
-                            : on ? "border-yellow-300 bg-yellow-50 text-gray-800"
-                                 : "border-gray-200 text-gray-500 hover:border-yellow-300",
+                        on ? "border-yellow-300 bg-yellow-50 text-gray-800"
+                           : "border-gray-200 text-gray-500 hover:border-yellow-300",
                       )}>
-                        {inh ? <span className="rounded bg-yellow-200/70 px-1 py-px text-[9px] text-yellow-700">GROUP</span> : on ? <Check size={12} className="text-yellow-700" /> : <Plus size={12} />} {componentLabel(c)}
+                        {on ? <Check size={12} className="text-yellow-700" /> : <Plus size={12} />} {componentLabel(c)}
                       </button>
                     );
                   })}
                 </div>
               </div>
+              <div className="text-[11px] leading-relaxed text-gray-400">Membership ID and OTP were saved to the database in the previous step. Role, scope and component grants below are still staged locally only — creating the dashboard login itself isn't wired to the live backend yet.</div>
               {err && <ErrLine>{err}</ErrLine>}
             </>
           )}
@@ -1741,8 +1633,9 @@ function CreateScreen({ groups, members, onBack, onCreate, onOtp, onChangeRole, 
           {step === 1 && lookupMode && <button onClick={() => doLookup()} disabled={looking} className={PRIMARY}>{looking ? "Looking up…" : "Look up cadre"}</button>}
           {step === 2 && <button onClick={() => {
             if (!name.trim()) return setErr("Name is required.");
-            if (!mobile.trim()) return setErr("Mobile number is required.");
+            if (!isValidMobile(mobile)) return setErr("Enter a valid 10-digit mobile number.");
             if (!cadre && !mid.trim()) return setErr("Membership ID is required.");
+            if (!cadre) return setErr('Click "Send OTP" to create the membership record first.');
             setErr(""); setStep(3);
           }} className={PRIMARY}>Next: access</button>}
           {step === 3 && <button onClick={submit} className={PRIMARY}>Create &amp; generate OTP</button>}

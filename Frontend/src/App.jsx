@@ -577,7 +577,7 @@ function Overview({ stats, members, onCreate, onViewActive, onViewInactive, onOp
           </div>
           <div className="mt-3.5 max-h-[420px] overflow-auto">
             <table className="w-full border-collapse text-sm">
-              <thead className="sticky top-0">
+              <thead className="sticky top-0 z-10">
                 <tr className="bg-gray-50/80 text-[11px] uppercase tracking-wide text-gray-400">
                   {["Membership ID", "Name", "Mobile", "Role", "Scope", "Status", "Created", ""].map((h, i) => (
                     <th key={i} className={cn("whitespace-nowrap bg-gray-50/80 font-medium", i === 7 ? "px-4 py-2.5 text-right" : "px-2 py-2.5 text-left", i === 0 && "pl-6")}>{h}</th>
